@@ -8,6 +8,8 @@ import smtplib
 import shutil
 import subprocess
 import time
+import urllib.error
+import urllib.request
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
@@ -81,6 +83,8 @@ WORD_ASSET_DIR = Path(os.environ.get("TAIGI_WEB_WORD_ASSET_DIR", JOB_ROOT / "wor
 WORD_AUTO_GENERATE_INTERVAL_SECONDS = int(os.environ.get("TAIGI_WEB_WORD_AUTO_GENERATE_INTERVAL_SECONDS", "1800"))
 STATS_PATH = Path(os.environ.get("TAIGI_WEB_STATS", JOB_ROOT / "stats.json"))
 SQLITE_DB = Path(os.environ.get("TAIGI_WEB_SQLITE_DB", JOB_ROOT / "taigi_web.sqlite3"))
+PUBLIC_STATIC_DIR = Path(os.environ.get("TAIGI_WEB_PUBLIC_STATIC_DIR", JOB_ROOT / "public_static"))
+PUBLIC_STATIC_URL = os.environ.get("TAIGI_WEB_PUBLIC_STATIC_URL", "/static-data").rstrip("/")
 PUBLIC_ACCESS = os.environ.get("TAIGI_WEB_PUBLIC_ACCESS", "1").lower() not in {"0", "false", "no", "off"}
 SESSION_COOKIE = "taigi_web_token"
 ADMIN_SESSION_COOKIE = "taigi_admin_session"
@@ -96,6 +100,8 @@ rate_limit_lock = Lock()
 word_db_lock = Lock()
 stats_lock = Lock()
 db_lock = Lock()
+snapshot_lock = Lock()
+snapshot_scheduled = False
 rate_limit_seen: dict[str, float] = {}
 job_queue: PriorityQueue = PriorityQueue()
 job_counter_lock = Lock()
@@ -138,6 +144,22 @@ class AppSettings(BaseModel):
     api_access_token: str = ""
     postgres_dsn: str = POSTGRES_DSN
     postgres_schema: str = POSTGRES_SCHEMA
+    llm_api_base_url: str = os.environ.get("TAIGI_WEB_LLM_API_BASE_URL", "").strip()
+    llm_api_key: str = os.environ.get("TAIGI_WEB_LLM_API_KEY", "").strip()
+    llm_model: str = os.environ.get("TAIGI_WEB_LLM_MODEL", "").strip()
+
+
+class RandomSentenceRequest(BaseModel):
+    topic: str = ""
+    style: str = "daily"
+    length: Literal["short", "medium"] = "short"
+
+
+class RandomSentenceResponse(BaseModel):
+    title: str
+    chinese_text: str
+    source: Literal["llm", "fallback"]
+    model: str = ""
 
 
 class PostgresExportResult(BaseModel):
@@ -193,6 +215,13 @@ class WordIssueRequest(BaseModel):
     reason: str = ""
 
 
+class WordCreateRequest(BaseModel):
+    source: str
+    taigi: str = ""
+    tailo: str = ""
+    note: str = ""
+
+
 class WordRatingRequest(BaseModel):
     rating: int
     note: str = ""
@@ -206,6 +235,12 @@ class WordAssetRatingRequest(BaseModel):
 class WordTranslationRequest(BaseModel):
     languages: list[str] = []
     overwrite: bool = False
+
+
+class SourceExportRequest(BaseModel):
+    languages: list[str] = []
+    format: Literal["json", "sqlite", "csv"] = "json"
+    note: str = ""
 
 
 class JobRatingRequest(BaseModel):
@@ -318,6 +353,8 @@ class JobStore:
         path = self._job_path(job.id)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(job.model_dump_json(indent=2), encoding="utf-8")
+        if job.status in {"complete", "failed"}:
+            schedule_public_snapshot_export()
 
     def load(self):
         with self._lock:
@@ -387,6 +424,7 @@ class JobStore:
             del self._jobs[job_id]
             db_delete_job(job_id)
         shutil.rmtree(JOB_ROOT / job_id, ignore_errors=True)
+        schedule_public_snapshot_export()
 
 
 def db_connect() -> sqlite3.Connection:
@@ -524,6 +562,26 @@ def export_sqlite_to_postgres(settings: AppSettings) -> PostgresExportResult:
 
 
 app_data = {"jobs": JobStore()}
+
+
+def static_public_url(key: str) -> str:
+    return f"{PUBLIC_STATIC_URL}/{key.lstrip('/')}"
+
+
+def static_write_json(key: str, payload: dict):
+    path = PUBLIC_STATIC_DIR / key.lstrip("/")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def static_copy_file(source: Path, key: str) -> Optional[str]:
+    if not source.exists() or not source.is_file():
+        return None
+    destination = PUBLIC_STATIC_DIR / key.lstrip("/")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not destination.exists() or destination.stat().st_mtime < source.stat().st_mtime:
+        shutil.copy2(source, destination)
+    return static_public_url(key)
 
 
 def next_job_counter() -> int:
@@ -820,6 +878,7 @@ async def lifespan(app: FastAPI):
     load_translation_memory()
     load_word_db()
     reset_interrupted_word_generations()
+    schedule_public_snapshot_export(delay=0.1)
     if not worker_thread.is_alive():
         worker_thread.start()
     if not word_auto_scheduler_thread.is_alive():
@@ -831,6 +890,8 @@ app = FastAPI(title="Taigi Voice Video Web", lifespan=lifespan)
 
 if (FRONTEND_DIST / "assets").exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+PUBLIC_STATIC_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/static-data", StaticFiles(directory=PUBLIC_STATIC_DIR), name="static-data")
 
 
 def web_token() -> Optional[str]:
@@ -879,6 +940,85 @@ def load_settings() -> AppSettings:
         settings = AppSettings()
         db_set_json("settings", settings.model_dump())
         return settings
+
+
+RANDOM_SENTENCE_FALLBACKS = [
+    "今天下午想聽一段輕鬆的生活新聞，內容可以聊人工智慧、台灣科技，還有週末適合做的事情。",
+    "早安，今天想用台語聽一則短短的重點整理，主題是半導體產業、AI 工具，以及一般人可以怎麼應用。",
+    "午安啊，今天在家裡想練習一句台語，先從簡單的日常問候開始，再慢慢學會介紹自己的生活。",
+    "我想做一支給自己聽的台語語音影片，內容介紹今天最值得注意的科技新聞和生活小提醒。",
+    "晚上散步的時候，我想聽一段台語短文，講一講珍珠奶茶、夜市小吃，以及台灣日常生活的趣味。",
+]
+
+
+def clean_generated_sentence(text: str) -> str:
+    text = re.sub(r"```.*?```", "", text, flags=re.S)
+    text = re.sub(r"^[「\"']|[」\"']$", "", text.strip())
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"^(中文稿|句子|範例|輸出)[:：]\s*", "", text)
+    if not re.search(r"[。！？!?]$", text):
+        text += "。"
+    return text[:220]
+
+
+def fallback_random_sentence(payload: RandomSentenceRequest) -> str:
+    topic = payload.topic.strip()
+    if topic:
+        templates = [
+            f"今天想聽一段關於{topic}的台語語音影片，內容要自然、簡短，適合用來練習聽台語。",
+            f"早安，今天的主題是{topic}，請用輕鬆的方式整理一小段重點，讓我可以轉成台語語音來聽。",
+            f"我想用台語聽一段{topic}的介紹，內容不用太長，但是要有生活感，也適合做成字幕影片。",
+        ]
+        return random.choice(templates)
+    return random.choice(RANDOM_SENTENCE_FALLBACKS)
+
+
+def generate_random_sentence(payload: RandomSentenceRequest) -> RandomSentenceResponse:
+    settings = load_settings()
+    if not settings.llm_api_key or not settings.llm_api_base_url or not settings.llm_model:
+        text = fallback_random_sentence(payload)
+        return RandomSentenceResponse(title=title_from_text(text), chinese_text=text, source="fallback")
+
+    topic = payload.topic.strip() or "台灣日常生活、科技新聞、學習台語"
+    length_hint = "一句到兩句，總長 40 到 70 個中文字" if payload.length == "short" else "兩到三句，總長 80 到 130 個中文字"
+    body = {
+        "model": settings.llm_model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是協助產生台語語音影片中文稿的編輯。只輸出繁體中文句子，不要解釋，不要條列，不要加標題。",
+            },
+            {
+                "role": "user",
+                "content": f"請生成適合轉成台語語音影片的中文稿。主題：{topic}。風格：自然、口語、台灣用語。長度：{length_hint}。",
+            },
+        ],
+        "temperature": 0.9,
+        "max_tokens": 220,
+    }
+    base = settings.llm_api_base_url.rstrip("/")
+    url = f"{base}/chat/completions"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {settings.llm_api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as res:
+            raw = json.loads(res.read().decode("utf-8"))
+        text = raw.get("choices", [{}])[0].get("message", {}).get("content", "")
+        text = clean_generated_sentence(text)
+        if not text:
+            raise ValueError("LLM did not return text.")
+        return RandomSentenceResponse(title=title_from_text(text), chinese_text=text, source="llm", model=settings.llm_model)
+    except Exception as exc:
+        print(f"LLM random sentence failed: {exc}", flush=True)
+        text = fallback_random_sentence(payload)
+        return RandomSentenceResponse(title=title_from_text(text), chinese_text=text, source="fallback", model=settings.llm_model)
     try:
         settings = AppSettings.model_validate_json(SETTINGS_PATH.read_text(encoding="utf-8"))
         db_set_json("settings", settings.model_dump())
@@ -1205,6 +1345,13 @@ def is_authenticated(request: Request) -> bool:
     return bool(authenticated_email(request))
 
 
+def require_email_login(request: Request) -> str:
+    email = authenticated_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail={"message": "這項申請需要先用 email 登入。"})
+    return email
+
+
 def require_auth(
     request: Request,
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
@@ -1335,6 +1482,75 @@ def record_stat_action(action: str, target_type: str = "", target_id: str = "", 
     save_stats(stats)
 
 
+def load_source_export_requests() -> dict:
+    payload = db_get_json("source_export_requests", None)
+    if not isinstance(payload, dict):
+        payload = {"requests": [], "by_email": {}, "updated_at": 0}
+        db_set_json("source_export_requests", payload)
+    payload.setdefault("requests", [])
+    payload.setdefault("by_email", {})
+    payload.setdefault("updated_at", 0)
+    return payload
+
+
+def save_source_export_requests(payload: dict):
+    payload["updated_at"] = time.time()
+    db_set_json("source_export_requests", payload)
+
+
+def source_export_summary() -> dict:
+    payload = load_source_export_requests()
+    requests = payload.get("requests", [])
+    by_email = payload.get("by_email", {})
+    return {
+        "total_requests": len(requests),
+        "requester_count": len(by_email),
+        "latest_requested_at": max((float(item.get("requested_at") or 0) for item in requests), default=0),
+    }
+
+
+def record_source_export_request(email: str, payload: SourceExportRequest) -> dict:
+    email = email.strip().lower()
+    now = time.time()
+    requested = [lang for lang in payload.languages if lang in SUPPORTED_CORPUS_LANGUAGES] or SUPPORTED_CORPUS_LANGUAGES
+    store = load_source_export_requests()
+    entry = {
+        "id": uuid.uuid4().hex,
+        "email": email,
+        "languages": requested,
+        "format": payload.format,
+        "note": payload.note.strip(),
+        "requested_at": now,
+    }
+    store.setdefault("requests", []).append(entry)
+    requester = store.setdefault("by_email", {}).setdefault(email, {
+        "email": email,
+        "count": 0,
+        "first_requested_at": now,
+        "last_requested_at": now,
+        "requested_at": [],
+    })
+    requester["count"] = int(requester.get("count") or 0) + 1
+    requester["first_requested_at"] = float(requester.get("first_requested_at") or now)
+    requester["last_requested_at"] = now
+    requester.setdefault("requested_at", []).append(now)
+    save_source_export_requests(store)
+    record_stat_action(
+        "request_source_export",
+        "source_export",
+        email,
+        metadata={"languages": requested, "format": payload.format},
+    )
+    summary = source_export_summary()
+    return {
+        "saved": True,
+        "request": entry,
+        "requester_count": requester["count"],
+        "total_requests": summary["total_requests"],
+        "unique_requesters": summary["requester_count"],
+    }
+
+
 def increment_play(kind: Literal["audio", "video"], target_type: Literal["job", "segment", "word"], target_id: str, job_id: str = ""):
     stats = load_stats()
     stats["total_plays"] = int(stats.get("total_plays") or 0) + 1
@@ -1358,6 +1574,7 @@ def increment_play(kind: Literal["audio", "video"], target_type: Literal["job", 
         asset["updated_at"] = time.time()
     save_stats(stats)
     record_stat_action(f"play_{kind}", target_type, f"{target_id}:{job_id}" if target_type == "word" and job_id else target_id if target_type != "segment" else f"{job_id}:{target_id}")
+    schedule_public_snapshot_export()
 
 
 def job_play_summary(job_id: str) -> dict:
@@ -1490,12 +1707,240 @@ def file_inventory() -> dict:
     }
 
 
+def public_media_for_job(job: Job) -> dict:
+    media: dict[str, str] = {}
+    if job.status != "complete":
+        return media
+    for kind, source in {
+        "audio": Path(job.audio_path or ""),
+        "video": Path(job.video_path or ""),
+        "zip": Path(job.zip_path or ""),
+    }.items():
+        suffix = source.suffix or (".wav" if kind == "audio" else ".mp4" if kind == "video" else ".zip")
+        url = static_copy_file(source, f"public/media/jobs/{job.id}/{kind}{suffix}")
+        if url:
+            media[kind] = url
+    output_dir = Path(job.output_dir or "")
+    for name, media_key in {
+        "taigi_draft.txt": "taigi",
+        "tailo.txt": "tailo",
+        "subtitles.json": "subtitles",
+        "segments.json": "segments",
+    }.items():
+        url = static_copy_file(output_dir / name, f"public/media/jobs/{job.id}/{name}")
+        if url:
+            media[media_key] = url
+    segments_dir = output_dir / "segments"
+    if segments_dir.exists():
+        for segment_audio in sorted(segments_dir.glob("seg_*.wav")):
+            static_copy_file(segment_audio, f"public/media/jobs/{job.id}/segments/{segment_audio.name}")
+    return media
+
+
+def public_media_for_word(word: dict) -> dict:
+    media: dict[str, str] = {}
+    for kind, source in {
+        "audio": Path(word.get("audio_path") or ""),
+        "video": Path(word.get("video_path") or ""),
+    }.items():
+        suffix = source.suffix or (".wav" if kind == "audio" else ".mp4")
+        url = static_copy_file(source, f"public/media/words/{word.get('id')}/legacy/{kind}{suffix}")
+        if url:
+            media[kind] = url
+    asset_media = {}
+    for asset in word.get("assets", []) or []:
+        asset_id = asset.get("id") or "asset"
+        urls = {}
+        for kind, source in {
+            "audio": Path(asset.get("audio_path") or ""),
+            "video": Path(asset.get("video_path") or ""),
+        }.items():
+            suffix = source.suffix or (".wav" if kind == "audio" else ".mp4")
+            url = static_copy_file(source, f"public/media/words/{word.get('id')}/{asset_id}/{kind}{suffix}")
+            if url:
+                urls[kind] = url
+        if urls:
+            asset_media[asset_id] = urls
+    if asset_media:
+        media["assets"] = asset_media
+    return media
+
+
+def public_word_entry(word: dict, stats_words: dict, user_id: str = "") -> dict:
+    ratings = word_rating_summary(word, user_id)
+    generation = word_generation_status(word)
+    return {
+        "id": word.get("id"),
+        "source": word.get("source"),
+        "taigi": word.get("taigi"),
+        "tailo": word.get("tailo"),
+        "kind": word.get("kind", "word"),
+        "category": word.get("category", "詞語"),
+        "note": word.get("note", ""),
+        "source_type": word.get("source_type", ""),
+        "count": word.get("count", 0),
+        "status": word.get("status", ""),
+        "request_count": len(word.get("requests") or []),
+        "play_count": int(stats_words.get(word.get("id", ""), {}).get("plays") or 0),
+        "audio_play_count": int(stats_words.get(word.get("id", ""), {}).get("audio_plays") or 0),
+        "video_play_count": int(stats_words.get(word.get("id", ""), {}).get("video_plays") or 0),
+        **ratings,
+        "problem": bool(word.get("problem")),
+        "problem_reason": word.get("problem_reason", ""),
+        "has_audio": bool(word.get("has_audio")),
+        "has_video": bool(word.get("has_video")),
+        "assets": public_word_assets(word, user_id),
+        "multilingual": word.get("multilingual", {}),
+        "multilingual_request_count": len(word.get("multilingual_requests") or []),
+        **generation,
+        "updated_at": word.get("updated_at"),
+        "generated_at": word.get("generated_at"),
+    }
+
+
+def public_jobs_snapshot() -> dict:
+    jobs = [
+        job for job in app_data["jobs"].list()
+        if job.status == "complete"
+    ]
+    payload_jobs = []
+    for job in sorted(jobs, key=job_sort_score, reverse=True):
+        item = present_job(job, admin=False, user_id="")
+        item["static_media"] = public_media_for_job(job)
+        item["segments_url"] = static_public_url(f"public/media/jobs/{job.id}/segments.json")
+        payload_jobs.append(item)
+    return {"jobs": payload_jobs, "total": len(payload_jobs), "updated_at": time.time()}
+
+
+def public_words_snapshot() -> dict:
+    db = load_word_db()
+    stats_words = load_stats().get("words", {})
+    words = []
+    for word in db.get("words", {}).values():
+        item = public_word_entry(word, stats_words)
+        item["static_media"] = public_media_for_word(word)
+        words.append(item)
+    words = sorted(
+        words,
+        key=lambda item: (
+            float(item.get("rating_average") or 0),
+            int(item.get("play_count") or 0),
+            int(item.get("count") or 0),
+        ),
+        reverse=True,
+    )
+    return {"words": words, "total": len(words), "updated_at": time.time()}
+
+
+def source_license_snapshot() -> dict:
+    return {
+        "title": "Source and License Governance Ledger",
+        "version": 1,
+        "updated_at": time.time(),
+        "policy": {
+            "allowed_dependency": "Clear open-source dependencies may be used with license notices and source links.",
+            "first_party_or_user_contributed": "First-party and user-contributed data must be covered by site terms before reuse.",
+            "confirm_before_import": "External datasets require commercial-use, derivative-use, redistribution, and attribution review before import.",
+            "do_not_import": "Sources without reusable licensing, or that forbid scraping/commercial use, must not be imported.",
+        },
+        "sources": [
+            {"name": "VoxCPM / VoxCPM2", "license": "Apache-2.0", "status": "allowed_dependency", "links": ["https://github.com/OpenBMB/VoxCPM", "https://huggingface.co/openbmb/VoxCPM2"]},
+            {"name": "PyTorch / torchaudio", "license": "BSD-style", "status": "allowed_dependency", "links": ["https://pytorch.org/", "https://github.com/pytorch/audio"]},
+            {"name": "taibun", "license": "MIT", "status": "allowed_dependency", "links": ["https://github.com/andreihar/taibun", "https://pypi.org/project/taibun/"]},
+            {"name": "jieba", "license": "MIT", "status": "allowed_dependency", "links": ["https://github.com/fxsjy/jieba", "https://pypi.org/project/jieba/"]},
+            {"name": "FastAPI / Uvicorn", "license": "open-source dependency", "status": "allowed_dependency", "links": ["https://fastapi.tiangolo.com/", "https://www.uvicorn.org/"]},
+            {"name": "React / Ant Design / Vite", "license": "MIT / Apache-2.0", "status": "allowed_dependency", "links": ["https://react.dev/", "https://ant.design/", "https://vite.dev/"]},
+            {"name": "FFmpeg / FFprobe", "license": "GPL-3.0-or-later build", "status": "confirm_before_distribution", "links": ["https://ffmpeg.org/", "https://ffmpeg.org/legal.html", "https://formulae.brew.sh/formula/ffmpeg"]},
+            {"name": "SQLite / PostgreSQL", "license": "public domain / PostgreSQL License", "status": "allowed_dependency", "links": ["https://www.sqlite.org/copyright.html", "https://www.postgresql.org/about/licence/"]},
+            {"name": "User contributed lexicon", "license": "site terms required", "status": "first_party_or_user_contributed"},
+            {"name": "MOE Taiwanese Taigi dictionary", "license": "pending review", "status": "confirm_before_import", "links": ["https://sutian.moe.edu.tw/"]},
+            {"name": "ChhoeTaigi / iTaigi community resources", "license": "dataset-level review required", "status": "confirm_before_import", "links": ["https://chhoe.taigi.info/", "https://itaigi.tw/", "https://github.com/ChhoeTaigi/ChhoeTaigiDatabase"]},
+        ],
+    }
+
+
+def export_public_snapshots() -> dict:
+    with snapshot_lock:
+        jobs_snapshot = public_jobs_snapshot()
+        words_snapshot = public_words_snapshot()
+        stats_snapshot = public_stats()
+        source_snapshot = source_license_snapshot()
+        index_snapshot = {
+            "version": 1,
+            "updated_at": time.time(),
+            "base_url": PUBLIC_STATIC_URL,
+            "snapshots": {
+                "stats": static_public_url("public/stats.json"),
+                "jobs": static_public_url("public/jobs/index.json"),
+                "lexicon": static_public_url("public/lexicon/index.json"),
+                "sources": static_public_url("public/sources/license-ledger.json"),
+            },
+        }
+        static_write_json("public/index.json", index_snapshot)
+        static_write_json("public/stats.json", stats_snapshot)
+        static_write_json("public/jobs/index.json", jobs_snapshot)
+        static_write_json("public/lexicon/index.json", words_snapshot)
+        static_write_json("public/sources/license-ledger.json", source_snapshot)
+        return index_snapshot
+
+
+def schedule_public_snapshot_export(delay: float = 0.5):
+    global snapshot_scheduled
+    with snapshot_lock:
+        if snapshot_scheduled:
+            return
+        snapshot_scheduled = True
+
+    def run_export():
+        global snapshot_scheduled
+        try:
+            time.sleep(delay)
+            export_public_snapshots()
+        except Exception as exc:
+            print(f"Failed to export public snapshots: {exc}", flush=True)
+        finally:
+            with snapshot_lock:
+                snapshot_scheduled = False
+
+    Thread(target=run_export, daemon=True).start()
+
+
 def public_stats() -> dict:
     stats = load_stats()
     jobs = app_data["jobs"].list()
     word_db = load_word_db()
+    words = list(word_db.get("words", {}).values())
     completed_jobs = [job for job in jobs if job.status == "complete"]
     inventory = file_inventory()
+    word_entries_rated = sum(1 for word in words if int(word_rating_summary(word).get("rating_count") or 0) > 0)
+    word_assets = [asset for word in words for asset in public_word_assets(word)]
+    word_assets_total = len(word_assets)
+    word_assets_rated = sum(1 for asset in word_assets if int(asset.get("rating_count") or 0) > 0)
+    word_assets_problem = sum(1 for word in words if word.get("problem"))
+    word_asset_jobs = [job for job in jobs if job.kind == "word_asset"]
+    actions = stats.get("actions", {})
+    source_exports = source_export_summary()
+    lexicon_quality = {
+        "word_entries_total": len(words),
+        "word_entries_rated": word_entries_rated,
+        "word_entries_unrated": max(0, len(words) - word_entries_rated),
+        "word_assets_total": word_assets_total,
+        "word_assets_rated": word_assets_rated,
+        "word_assets_unrated": max(0, word_assets_total - word_assets_rated),
+        "word_problem_count": word_assets_problem,
+        "word_problem_rate": round(word_assets_problem / len(words), 4) if words else 0,
+        "word_regeneration_requests": int(actions.get("create_word_asset_job") or 0),
+        "word_regeneration_complete": sum(1 for job in word_asset_jobs if job.status == "complete"),
+        "word_regeneration_queued": sum(1 for job in word_asset_jobs if job.status == "queued"),
+        "word_regeneration_running": sum(1 for job in word_asset_jobs if job.status == "running"),
+        "word_regeneration_failed": sum(1 for job in word_asset_jobs if job.status == "failed"),
+        "word_translation_requests": int(actions.get("request_word_translations") or 0),
+        "source_export_requests": source_exports["total_requests"],
+        "source_export_requesters": source_exports["requester_count"],
+        "word_queries_total": sum(int(item.get("count") or 0) for item in word_db.get("queries", {}).values()),
+        "word_assets_with_audio": sum(1 for asset in word_assets if asset.get("has_audio")),
+        "word_assets_with_video": sum(1 for asset in word_assets if asset.get("has_video")),
+    }
     return {
         **inventory,
         "total_plays": int(stats.get("total_plays") or 0),
@@ -1506,9 +1951,11 @@ def public_stats() -> dict:
         "jobs_running": sum(1 for job in jobs if job.status == "running"),
         "jobs_queued": sum(1 for job in jobs if job.status == "queued"),
         "jobs_failed": sum(1 for job in jobs if job.status == "failed"),
-        "words_total": len(word_db.get("words", {})),
-        "word_queries_total": sum(int(item.get("count") or 0) for item in word_db.get("queries", {}).values()),
-        "actions": stats.get("actions", {}),
+        "words_total": len(words),
+        "word_queries_total": lexicon_quality["word_queries_total"],
+        "source_exports": source_exports,
+        "lexicon_quality": lexicon_quality,
+        "actions": actions,
         "daily": [
             {"date": date, **day}
             for date, day in sorted(stats.get("daily", {}).items())
@@ -1823,6 +2270,7 @@ def save_word_db(payload: dict):
         payload["updated_at"] = time.time()
         db_set_json("word_db", payload)
         WORD_DB.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    schedule_public_snapshot_export()
 
 
 SUPPORTED_CORPUS_LANGUAGES = ["zh-Hant", "zh-Hans", "en", "ja", "ko", "taigi", "tailo"]
@@ -1911,6 +2359,50 @@ def remember_word_query(query: str):
     save_word_db(db)
 
 
+def create_requested_word_entry(payload: WordCreateRequest, requester_id: str, requester_name: str) -> dict:
+    source = payload.source.strip()
+    if not source:
+        raise HTTPException(status_code=400, detail={"message": "請輸入想新增的詞語。"})
+    taigi_text = payload.taigi.strip() or translate_chinese_to_taigi(source)
+    tailo_text = payload.tailo.strip() or tailo_for(taigi_text)
+    word_id = safe_word_id(source, taigi_text)
+    db = load_word_db()
+    words = db.setdefault("words", {})
+    now = time.time()
+    existing = words.get(word_id, {})
+    requests = existing.setdefault("requests", [])
+    requests.append({
+        "source": source,
+        "taigi": payload.taigi.strip(),
+        "tailo": payload.tailo.strip(),
+        "note": payload.note.strip(),
+        "requested_by_id": requester_id,
+        "requested_by_name": requester_name,
+        "requested_at": now,
+    })
+    word = {
+        **existing,
+        "id": word_id,
+        "source": source,
+        "taigi": taigi_text,
+        "tailo": tailo_text,
+        "kind": existing.get("kind") or word_kind(source),
+        "category": existing.get("category") or ("固定語句" if word_kind(source) == "phrase" else "詞語"),
+        "note": existing.get("note") or payload.note.strip(),
+        "source_type": existing.get("source_type") or "user_requested",
+        "status": existing.get("status") or "requested",
+        "count": int(existing.get("count") or 0),
+        "jobs": existing.get("jobs", []),
+        "requests": requests,
+        "request_count": len(requests),
+        "requested_at": existing.get("requested_at") or now,
+        "updated_at": now,
+    }
+    words[word_id] = word
+    save_word_db(db)
+    return word
+
+
 def upsert_lexicon_entry(db: dict, source: str, taigi_text: str, tailo_text: str, job_id: str = "", category: str = "", source_type: str = "generated", generate_assets_flag: bool = False, payload: Optional[CreateJobRequest] = None, voice_mode: str = "default", voice_control: str = "") -> bool:
     source = source.strip()
     taigi_text = taigi_text.strip()
@@ -1924,7 +2416,7 @@ def upsert_lexicon_entry(db: dict, source: str, taigi_text: str, tailo_text: str
         "id": word_id,
         "source": source,
         "taigi": taigi_text,
-        "tailo": tailo_text or tailo(taigi_text),
+        "tailo": tailo_text or tailo_for(taigi_text),
         "kind": existing.get("kind") or word_kind(source),
         "category": category or existing.get("category") or ("固定語句" if word_kind(source) == "phrase" else "詞語"),
         "source_type": existing.get("source_type") or source_type,
@@ -2180,7 +2672,7 @@ def update_word_database_for_job(job_id: str, segment_records: list[dict], paylo
             taigi_word = translate_chinese_to_taigi(source_word)
             if not taigi_word:
                 continue
-            tailo_word = tailo(taigi_word)
+            tailo_word = tailo_for(taigi_word)
             changed = upsert_lexicon_entry(
                 db,
                 source_word,
@@ -2588,6 +3080,7 @@ async def api_info():
         "default_reference_voice_mode": settings.default_reference_voice_mode,
         "public_rate_limit_seconds": settings.public_rate_limit_seconds,
         "public_access": PUBLIC_ACCESS,
+        "llm_random_sentence_enabled": bool(settings.llm_api_base_url and settings.llm_api_key and settings.llm_model),
         "reference_voice_modes": [
             {"value": "default", "label": "預設聲音"},
             {"value": "random", "label": "隨機生成"},
@@ -2663,33 +3156,7 @@ async def search_words(
     )
     public_items = []
     for item in items[: max(1, min(limit, 200))]:
-        ratings = word_rating_summary(item, user_id)
-        generation = word_generation_status(item)
-        public_items.append({
-            "id": item.get("id"),
-            "source": item.get("source"),
-            "taigi": item.get("taigi"),
-            "tailo": item.get("tailo"),
-            "kind": item.get("kind", "word"),
-            "category": item.get("category", "詞語"),
-            "note": item.get("note", ""),
-            "source_type": item.get("source_type", ""),
-            "count": item.get("count", 0),
-            "play_count": int(stats_words.get(item.get("id", ""), {}).get("plays") or 0),
-            "audio_play_count": int(stats_words.get(item.get("id", ""), {}).get("audio_plays") or 0),
-            "video_play_count": int(stats_words.get(item.get("id", ""), {}).get("video_plays") or 0),
-            **ratings,
-            "problem": bool(item.get("problem")),
-            "problem_reason": item.get("problem_reason", ""),
-            "has_audio": bool(item.get("has_audio")),
-            "has_video": bool(item.get("has_video")),
-            "assets": public_word_assets(item, user_id),
-            "multilingual": item.get("multilingual", {}),
-            "multilingual_request_count": len(item.get("multilingual_requests") or []),
-            **generation,
-            "updated_at": item.get("updated_at"),
-            "generated_at": item.get("generated_at"),
-        })
+        public_items.append(public_word_entry(item, stats_words, user_id))
     return {"words": public_items, "total": len(items)}
 
 
@@ -2698,10 +3165,52 @@ async def stats_page_data():
     return public_stats()
 
 
+@app.post("/snapshots/export")
+async def export_public_snapshots_endpoint(
+    request: Request,
+    taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
+):
+    require_auth(request, taigi_web_token_cookie, authorization)
+    return export_public_snapshots()
+
+
 @app.post("/stats/action")
 async def record_action_endpoint(payload: StatActionRequest):
     record_stat_action(payload.action, payload.target_type, payload.target_id, metadata=payload.metadata)
     return {"saved": True}
+
+
+@app.post("/llm/random-sentence")
+async def random_sentence_endpoint(payload: RandomSentenceRequest):
+    result = generate_random_sentence(payload)
+    record_stat_action("generate_random_sentence", "llm", result.source)
+    return result
+
+
+@app.post("/sources/export-requests")
+async def request_source_export(payload: SourceExportRequest, request: Request):
+    email = require_email_login(request)
+    return record_source_export_request(email, payload)
+
+
+@app.post("/words/requests")
+async def request_new_word(payload: WordCreateRequest, request: Request, response: Response):
+    email = require_email_login(request)
+    user_id = f"admin:{email}" if email == ADMIN_EMAIL else f"user:{email}"
+    word = create_requested_word_entry(payload, user_id, reviewer_display_name(user_id))
+    record_stat_action("request_new_word", "word", word["id"], metadata={"email": email})
+    return {
+        "saved": True,
+        "word": {
+            "id": word.get("id"),
+            "source": word.get("source"),
+            "taigi": word.get("taigi"),
+            "tailo": word.get("tailo"),
+            "status": word.get("status"),
+            "request_count": len(word.get("requests") or []),
+        },
+    }
 
 
 @app.post("/words/{word_id}/rating")
@@ -2773,11 +3282,12 @@ async def report_word_issue(word_id: str, payload: WordIssueRequest):
 
 @app.post("/words/{word_id}/translations")
 async def request_word_translations(word_id: str, payload: WordTranslationRequest, request: Request, response: Response):
+    email = require_email_login(request)
     db = load_word_db()
     word = db.get("words", {}).get(word_id)
     if not word:
         raise HTTPException(status_code=404, detail={"message": "找不到這個詞語。"})
-    user_id = review_user_id(request, response)
+    user_id = f"admin:{email}" if email == ADMIN_EMAIL else f"user:{email}"
     requester_name = reviewer_display_name(user_id)
     word = request_word_multilingual_corpus(
         word,
@@ -2788,7 +3298,7 @@ async def request_word_translations(word_id: str, payload: WordTranslationReques
     )
     db["words"][word_id] = word
     save_word_db(db)
-    record_stat_action("request_word_translations", "word", word_id, metadata={"languages": payload.languages})
+    record_stat_action("request_word_translations", "word", word_id, metadata={"languages": payload.languages, "email": email})
     return {
         "saved": True,
         "word": {
@@ -2904,6 +3414,9 @@ async def update_admin_settings(
         "api_access_token": settings.api_access_token.strip(),
         "postgres_dsn": settings.postgres_dsn.strip(),
         "postgres_schema": schema_name,
+        "llm_api_base_url": settings.llm_api_base_url.strip().rstrip("/"),
+        "llm_api_key": settings.llm_api_key.strip(),
+        "llm_model": settings.llm_model.strip(),
     })
     save_settings(normalized)
     return normalized

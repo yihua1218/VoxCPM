@@ -378,6 +378,14 @@ a {
   line-height: 1;
 }
 
+.compact-stats-grid {
+  margin-top: 10px;
+}
+
+.compact-stats-grid strong {
+  font-size: 20px;
+}
+
 .side-stats-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
