@@ -1,6 +1,53 @@
-launch.json
-__pycache__
-voxcpm.egg-info
+# macOS / editors
 .DS_Store
-./pretrained_models/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Python packaging / build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local app variants and secrets
 app_local.py
+.env
+.env.*
+
+# Model, dataset, and generated media artifacts
+pretrained_models/
+outputs/
+checkpoints/
+runs/
+wandb/
+
+# Taigi web runtime artifacts
+taigi_web_jobs/
+taigi_web/frontend/node_modules/
+taigi_web/frontend/dist/
+taigi_web/frontend/*.tsbuildinfo
+
+# JavaScript / TypeScript caches
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.eslintcache

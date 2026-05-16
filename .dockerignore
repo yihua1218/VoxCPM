@@ -1,0 +1,14 @@
+.git
+.venv
+.vscode
+__pycache__
+*.py[cod]
+.DS_Store
+
+outputs
+pretrained_models
+taigi_web_jobs
+
+taigi_web/frontend/node_modules
+taigi_web/frontend/dist
+taigi_web/frontend/tsconfig.tsbuildinfo

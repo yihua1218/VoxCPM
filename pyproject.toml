@@ -42,12 +42,16 @@ dependencies = [
     "simplejson",
     "sortedcontainers",
     "soundfile",
+    "fastapi",
+    "pillow",
+    "python-multipart",
     "librosa",
     "matplotlib",
     "funasr",
     "spaces",
     "argbind",
-    "safetensors"
+    "safetensors",
+    "uvicorn"
 
 ]
 

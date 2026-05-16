@@ -1,0 +1,24 @@
+services:
+  taigi-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: voxcpm-taigi-web:local
+    ports:
+      - "${TAIGI_WEB_PORT:-8877}:8876"
+    environment:
+      TAIGI_WEB_TOKEN: ${TAIGI_WEB_TOKEN:-}
+      TAIGI_WEB_JOB_DIR: /app/taigi_web_jobs
+      TAIGI_WEB_MODEL_CACHE: /app/pretrained_models/hf-cache
+      TAIGI_WEB_REFERENCE_AUDIO: /app/outputs/taigi_full_segments/seg_02.wav
+      TAIGI_WEB_DEFAULT_DEVICE: ${TAIGI_WEB_DEFAULT_DEVICE:-cpu}
+      TAIGI_WEB_COPY_TO_ONEDRIVE: "0"
+      TAIGI_WEB_WORKERS: ${TAIGI_WEB_WORKERS:-1}
+      TAIGI_WEB_FFMPEG: /usr/bin/ffmpeg
+      TAIGI_WEB_FFPROBE: /usr/bin/ffprobe
+      TAIGI_WEB_VOXCPM_BIN: /usr/local/bin/voxcpm
+    volumes:
+      - ./taigi_web_jobs:/app/taigi_web_jobs
+      - ./pretrained_models:/app/pretrained_models
+      - ./outputs:/app/outputs:ro
+    restart: unless-stopped
