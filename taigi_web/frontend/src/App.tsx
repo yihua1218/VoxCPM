@@ -96,15 +96,23 @@ interface AuthStatus {
   authenticated: boolean;
   token_required: boolean;
   loopback_only: boolean;
+  auth_method?: string;
 }
 
 interface ApiInfo {
   default_device: string;
   default_copy_to_onedrive: boolean;
+  default_reference_voice_mode?: 'default' | 'random';
   public_rate_limit_seconds?: number;
   reference_voice_modes?: { value: 'default' | 'random'; label: string }[];
   translation_memory?: string;
   pipeline: string[];
+}
+
+interface AdminSettings {
+  default_reference_voice_mode: 'default' | 'random';
+  public_rate_limit_seconds: number;
+  api_access_token: string;
 }
 
 interface FormValues {
@@ -230,7 +238,9 @@ const exampleTexts = [
 function App() {
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [apiInfo, setApiInfo] = useState<ApiInfo | null>(null);
-  const [token, setToken] = useState('');
+  const [loginEmail, setLoginEmail] = useState('');
+  const [magicLinkSent, setMagicLinkSent] = useState(false);
+  const [adminSettings, setAdminSettings] = useState<AdminSettings | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
@@ -258,7 +268,6 @@ function App() {
   };
 
   const loadJobs = async () => {
-    if (!auth?.authenticated) return;
     setLoadingJobs(true);
     try {
       const res = await axios.get<{ jobs: Job[] }>('/jobs');
@@ -276,6 +285,12 @@ function App() {
     } finally {
       setLoadingJobs(false);
     }
+  };
+
+  const loadAdminSettings = async () => {
+    if (!auth?.authenticated) return;
+    const res = await axios.get<AdminSettings>('/admin/settings');
+    setAdminSettings(res.data);
   };
 
   const loadSegments = async (jobId: string) => {
@@ -300,17 +315,37 @@ function App() {
   };
 
   useEffect(() => {
-    loadAuth().catch(() => {
-      setAuth({ authenticated: false, token_required: true, loopback_only: false });
-    });
+    const params = new URLSearchParams(window.location.search);
+    const loginToken = params.get('token');
+    if (loginToken) {
+      axios.post('/auth/verify', { token: loginToken })
+        .then(async () => {
+          window.history.replaceState({}, document.title, window.location.pathname);
+          await loadAuth();
+          message.success('已登入');
+        })
+        .catch(() => {
+          window.history.replaceState({}, document.title, window.location.pathname);
+          setAuth({ authenticated: false, token_required: true, loopback_only: false });
+          message.error('登入連結無效或已過期');
+        });
+    } else {
+      loadAuth().catch(() => {
+        setAuth({ authenticated: false, token_required: true, loopback_only: false });
+      });
+    }
     loadInfo().catch(() => undefined);
   }, []);
 
   useEffect(() => {
-    if (!auth?.authenticated) return;
+    if (auth === null) return;
     loadJobs();
     const timer = window.setInterval(loadJobs, 2500);
     return () => window.clearInterval(timer);
+  }, [auth?.authenticated, auth !== null]);
+
+  useEffect(() => {
+    loadAdminSettings().catch(() => undefined);
   }, [auth?.authenticated]);
 
   useEffect(() => {
@@ -322,22 +357,38 @@ function App() {
   }, [selectedJob?.id, selectedJob?.status]);
 
   const signIn = async () => {
-    const body = new FormData();
-    body.append('token', token);
+    if (!loginEmail.trim()) {
+      message.warning('請輸入 admin email');
+      return;
+    }
     try {
-      await axios.post('/auth', body);
-      await loadAuth();
-      message.success('Signed in');
-    } catch {
-      message.error('Invalid private access token');
+      await axios.post('/auth/magic-link', { email: loginEmail });
+      setMagicLinkSent(true);
+      message.success('登入連結已寄出');
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      message.error(detail || '無法寄出登入連結');
     }
   };
 
   const logout = async () => {
-    await axios.post('/auth/logout');
-    setJobs([]);
-    setSelectedJobId(null);
-    await loadAuth();
+      await axios.post('/auth/logout');
+      setJobs([]);
+      setAdminSettings(null);
+      setSelectedJobId(null);
+      await loadAuth();
+  };
+
+  const saveAdminSettings = async (values: AdminSettings) => {
+    try {
+      const res = await axios.put<AdminSettings>('/admin/settings', values);
+      setAdminSettings(res.data);
+      await loadInfo();
+      message.success('管理設定已更新');
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      message.error(detail || '無法更新管理設定');
+    }
   };
 
   const startJob = async (values: FormValues) => {
@@ -482,47 +533,17 @@ function App() {
           <Space>
             {signedIn ? (
               <>
-                <Tag color="success">Signed in</Tag>
+                <Tag color="success">Admin</Tag>
                 <Button icon={<ReloadOutlined />} onClick={loadJobs} loading={loadingJobs}>Refresh</Button>
                 <Button icon={<LogoutOutlined />} onClick={logout}>Sign out</Button>
               </>
             ) : (
-              <Tag icon={<LockOutlined />} color="warning">Private access required</Tag>
+              <Tag color="blue">Public</Tag>
             )}
           </Space>
         </Header>
 
         <Content className="app-content">
-          {!signedIn ? (
-            <Card>
-              <div className="card-title">
-                <Title level={3}>Sign in</Title>
-                <Paragraph type="secondary">
-                  Enter the private access token configured with <Text code>TAIGI_WEB_TOKEN</Text>.
-                  Without a token, local loopback access is allowed.
-                </Paragraph>
-              </div>
-              {auth?.loopback_only && (
-                <Alert
-                  type="info"
-                  showIcon
-                  style={{ marginBottom: 16 }}
-                  message="Loopback-only mode"
-                  description="目前沒有設定 TAIGI_WEB_TOKEN，server 只允許本機連線。"
-                />
-              )}
-              <Form layout="vertical" onFinish={signIn}>
-                <Form.Item label="Private access token">
-                  <Input.Password
-                    value={token}
-                    onChange={(event) => setToken(event.target.value)}
-                    placeholder="Private token"
-                  />
-                </Form.Item>
-                <Button type="primary" htmlType="submit">Sign in</Button>
-              </Form>
-            </Card>
-          ) : (
             <div className="app-grid">
               <Space direction="vertical" size={16} style={{ width: '100%' }}>
                 <Card>
@@ -556,7 +577,7 @@ function App() {
                       title: '台語語音影片',
                       chinese_text: defaultChineseText,
                       taigi_override: '',
-                      reference_voice_mode: 'default',
+                      reference_voice_mode: apiInfo?.default_reference_voice_mode ?? 'default',
                       control: '闽南话，台湾口音，语气自然，语速正常，保持参考音频的男声音色和说话方式',
                       device: apiInfo?.default_device ?? 'mps',
                       inference_timesteps: 10,
@@ -664,9 +685,11 @@ function App() {
                             <Button href={`/jobs/${selectedJob.id}/download/taigi`}>台語稿</Button>
                             <Button href={`/jobs/${selectedJob.id}/download/tailo`}>台羅</Button>
                             <Button href={`/jobs/${selectedJob.id}/download/segments`}>分段 JSON</Button>
-                            <Button danger icon={<DeleteOutlined />} onClick={() => deleteJob(selectedJob)}>
-                              刪除
-                            </Button>
+                            {signedIn && (
+                              <Button danger icon={<DeleteOutlined />} onClick={() => deleteJob(selectedJob)}>
+                                刪除
+                              </Button>
+                            )}
                           </div>
                           <Divider />
                           <Title level={4} style={{ margin: 0 }}>分段檢視與修正</Title>
@@ -781,7 +804,7 @@ function App() {
                           )}
                         </>
                       )}
-                      {selectedJob.status === 'failed' && (
+                      {signedIn && selectedJob.status === 'failed' && (
                         <Button danger icon={<DeleteOutlined />} onClick={() => deleteJob(selectedJob)}>
                           刪除失敗工作
                         </Button>

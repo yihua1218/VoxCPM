@@ -2,18 +2,22 @@ import json
 import os
 import random
 import re
+import secrets
+import smtplib
 import shutil
 import subprocess
 import time
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
+from email.message import EmailMessage
+from hashlib import sha256
 from ipaddress import ip_address
 from pathlib import Path
 from queue import PriorityQueue
 from threading import Lock, Thread
 from typing import Annotated, Literal, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from fastapi import Cookie, FastAPI, Form, Header, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -40,20 +44,28 @@ DEFAULT_COPY_TO_ONEDRIVE = os.environ.get("TAIGI_WEB_COPY_TO_ONEDRIVE", "1").low
 TRANSLATION_MEMORY = Path(os.environ.get("TAIGI_WEB_TRANSLATION_MEMORY", JOB_ROOT / "translation_memory.json"))
 PUBLIC_ACCESS = os.environ.get("TAIGI_WEB_PUBLIC_ACCESS", "1").lower() not in {"0", "false", "no", "off"}
 SESSION_COOKIE = "taigi_web_token"
+ADMIN_SESSION_COOKIE = "taigi_admin_session"
+ADMIN_EMAIL = (os.environ.get("TAIGI_WEB_ADMIN_EMAIL") or os.environ.get("ADMIN_EMAIL") or "yihua1218@gmail.com").strip().lower()
+PUBLIC_URL = os.environ.get("TAIGI_WEB_PUBLIC_URL") or os.environ.get("PUBLIC_URL") or "https://taigi.yihua.app"
+AUTH_STORE = JOB_ROOT / "auth_store.json"
+MAGIC_LINK_TTL_SECONDS = int(os.environ.get("TAIGI_WEB_MAGIC_LINK_TTL_SECONDS", "900"))
+SESSION_TTL_SECONDS = int(os.environ.get("TAIGI_WEB_SESSION_TTL_SECONDS", str(60 * 60 * 24 * 30)))
 memory_lock = Lock()
+auth_lock = Lock()
 rate_limit_lock = Lock()
 rate_limit_seen: dict[str, float] = {}
 job_queue: PriorityQueue = PriorityQueue()
 job_counter_lock = Lock()
 job_counter = 0
 RATE_LIMIT_SECONDS = int(os.environ.get("TAIGI_WEB_PUBLIC_JOB_INTERVAL_SECONDS", "600"))
+SETTINGS_PATH = JOB_ROOT / "admin_settings.json"
 
 
 class CreateJobRequest(BaseModel):
     title: str = "台語語音影片"
     chinese_text: str
     taigi_override: str = ""
-    reference_voice_mode: Literal["default", "random"] = "default"
+    reference_voice_mode: Optional[Literal["default", "random"]] = None
     control: str = "闽南话，台湾口音，语气自然，语速正常，保持参考音频的男声音色和说话方式"
     device: str = DEFAULT_DEVICE
     inference_timesteps: int = 10
@@ -61,6 +73,20 @@ class CreateJobRequest(BaseModel):
     max_chars_per_segment: int = 90
     make_video: bool = True
     copy_to_onedrive: bool = DEFAULT_COPY_TO_ONEDRIVE
+
+
+class MagicLinkRequest(BaseModel):
+    email: str
+
+
+class VerifyMagicLinkRequest(BaseModel):
+    token: str
+
+
+class AppSettings(BaseModel):
+    default_reference_voice_mode: Literal["default", "random"] = "default"
+    public_rate_limit_seconds: int = RATE_LIMIT_SECONDS
+    api_access_token: str = ""
 
 
 class Job(BaseModel):
@@ -224,6 +250,147 @@ def web_token() -> Optional[str]:
     return os.environ.get("TAIGI_WEB_TOKEN")
 
 
+def hash_secret(value: str) -> str:
+    return sha256(value.encode("utf-8")).hexdigest()
+
+
+def load_auth_store() -> dict:
+    with auth_lock:
+        if not AUTH_STORE.exists():
+            return {"magic_tokens": {}, "sessions": {}}
+        try:
+            payload = json.loads(AUTH_STORE.read_text(encoding="utf-8"))
+        except Exception:
+            return {"magic_tokens": {}, "sessions": {}}
+        payload.setdefault("magic_tokens", {})
+        payload.setdefault("sessions", {})
+        return payload
+
+
+def load_settings() -> AppSettings:
+    if not SETTINGS_PATH.exists():
+        return AppSettings()
+    try:
+        return AppSettings.model_validate_json(SETTINGS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return AppSettings()
+
+
+def save_settings(settings: AppSettings):
+    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS_PATH.write_text(settings.model_dump_json(indent=2), encoding="utf-8")
+
+
+def save_auth_store(payload: dict):
+    with auth_lock:
+        AUTH_STORE.parent.mkdir(parents=True, exist_ok=True)
+        AUTH_STORE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def prune_auth_store(payload: dict):
+    now = time.time()
+    payload["magic_tokens"] = {
+        token_hash: entry
+        for token_hash, entry in payload.get("magic_tokens", {}).items()
+        if entry.get("expires_at", 0) > now
+    }
+    payload["sessions"] = {
+        token_hash: entry
+        for token_hash, entry in payload.get("sessions", {}).items()
+        if entry.get("expires_at", 0) > now
+    }
+
+
+def create_magic_token(email: str) -> str:
+    token = secrets.token_urlsafe(32)
+    payload = load_auth_store()
+    prune_auth_store(payload)
+    payload["magic_tokens"][hash_secret(token)] = {
+        "email": email,
+        "expires_at": time.time() + MAGIC_LINK_TTL_SECONDS,
+    }
+    save_auth_store(payload)
+    return token
+
+
+def create_admin_session(email: str) -> str:
+    token = secrets.token_urlsafe(32)
+    payload = load_auth_store()
+    prune_auth_store(payload)
+    payload["sessions"][hash_secret(token)] = {
+        "email": email,
+        "expires_at": time.time() + SESSION_TTL_SECONDS,
+    }
+    save_auth_store(payload)
+    return token
+
+
+def consume_magic_token(token: str) -> Optional[str]:
+    payload = load_auth_store()
+    prune_auth_store(payload)
+    token_hash = hash_secret(token.strip())
+    entry = payload.get("magic_tokens", {}).pop(token_hash, None)
+    save_auth_store(payload)
+    if not entry:
+        return None
+    email = entry.get("email", "").strip().lower()
+    return email if email == ADMIN_EMAIL else None
+
+
+def session_email(token: str) -> Optional[str]:
+    payload = load_auth_store()
+    prune_auth_store(payload)
+    entry = payload.get("sessions", {}).get(hash_secret(token.strip()))
+    if not entry:
+        return None
+    email = entry.get("email", "").strip().lower()
+    return email if email == ADMIN_EMAIL else None
+
+
+def revoke_session(token: Optional[str]):
+    if not token:
+        return
+    payload = load_auth_store()
+    payload.get("sessions", {}).pop(hash_secret(token.strip()), None)
+    save_auth_store(payload)
+
+
+def smtp_value(*names: str) -> Optional[str]:
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
+def send_magic_link_email(to_email: str, login_url: str) -> bool:
+    host = smtp_value("TAIGI_WEB_SMTP_HOST", "SMTP_RELAY_HOST")
+    if not host:
+        print(f"TAIGI WEB MAGIC LOGIN LINK for {to_email}: {login_url}", flush=True)
+        return False
+    port = int(smtp_value("TAIGI_WEB_SMTP_PORT", "SMTP_RELAY_PORT") or "587")
+    user = smtp_value("TAIGI_WEB_SMTP_USER", "SMTP_RELAY_USER")
+    password = smtp_value("TAIGI_WEB_SMTP_PASS", "SMTP_RELAY_PASS")
+    from_email = smtp_value("TAIGI_WEB_FROM_EMAIL", "ASSISTANT_EMAIL", "SMTP_RELAY_USER") or user or to_email
+
+    msg = EmailMessage()
+    msg["Subject"] = "台語語音影片工具登入連結"
+    msg["From"] = from_email
+    msg["To"] = to_email
+    msg.set_content(f"請點擊以下連結登入台語語音影片工具：\n\n{login_url}\n\n這個連結 15 分鐘內有效。")
+
+    if port == 465:
+        smtp = smtplib.SMTP_SSL(host, port, timeout=20)
+    else:
+        smtp = smtplib.SMTP(host, port, timeout=20)
+        smtp.starttls()
+    with smtp:
+        if user and password:
+            smtp.login(user, password)
+        smtp.send_message(msg)
+    return True
+
+
 def is_loopback(request: Request) -> bool:
     host = request.client.host if request.client else ""
     return host in {"127.0.0.1", "::1", "localhost"}
@@ -255,19 +422,32 @@ def sentence_count(text: str) -> int:
 def enforce_public_rate_limit(request: Request, text: str):
     if is_private_client(request):
         return
+    limit_seconds = max(60, int(load_settings().public_rate_limit_seconds))
     if sentence_count(text) > 1:
         raise HTTPException(status_code=429, detail="Public users can submit only one sentence per job.")
     ip = client_ip(request) or "unknown"
     now = time.time()
     with rate_limit_lock:
         last = rate_limit_seen.get(ip, 0)
-        remaining = RATE_LIMIT_SECONDS - (now - last)
+        remaining = limit_seconds - (now - last)
         if remaining > 0:
             raise HTTPException(
                 status_code=429,
-                detail=f"Public rate limit: submit one sentence every {RATE_LIMIT_SECONDS // 60} minutes. Try again in {int(remaining)} seconds.",
+                detail=f"Public rate limit: submit one sentence every {limit_seconds // 60} minutes. Try again in {int(remaining)} seconds.",
             )
         rate_limit_seen[ip] = now
+
+
+def enforce_login_rate_limit(request: Request):
+    ip = client_ip(request) or "unknown"
+    key = f"login:{ip}"
+    now = time.time()
+    with rate_limit_lock:
+        last = rate_limit_seen.get(key, 0)
+        remaining = 60 - (now - last)
+        if remaining > 0:
+            raise HTTPException(status_code=429, detail=f"Please wait {int(remaining)} seconds before requesting another login link.")
+        rate_limit_seen[key] = now
 
 
 def is_authorized(
@@ -275,13 +455,18 @@ def is_authorized(
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
     authorization: Annotated[Optional[str], Header()] = None,
 ) -> bool:
-    if PUBLIC_ACCESS:
+    admin_session = request.cookies.get(ADMIN_SESSION_COOKIE)
+    if admin_session and session_email(admin_session) == ADMIN_EMAIL:
         return True
     token = web_token()
-    if not token:
-        return is_loopback(request)
-    bearer = authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else ""
-    return taigi_web_token_cookie == token or bearer == token
+    if token:
+        bearer = authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else ""
+        return taigi_web_token_cookie == token or bearer == token
+    settings_token = load_settings().api_access_token.strip()
+    if settings_token and authorization and authorization.lower().startswith("bearer "):
+        bearer = authorization[7:].strip()
+        return secrets.compare_digest(bearer, settings_token)
+    return not PUBLIC_ACCESS and is_loopback(request)
 
 
 def require_auth(
@@ -291,6 +476,21 @@ def require_auth(
 ):
     if not is_authorized(request, taigi_web_token_cookie, authorization):
         raise HTTPException(status_code=401, detail="Private access required")
+
+
+def job_is_public(job: Job) -> bool:
+    return job.status == "complete"
+
+
+def require_job_access(
+    job: Job,
+    request: Request,
+    taigi_web_token_cookie: Optional[str] = None,
+    authorization: Optional[str] = None,
+):
+    if job_is_public(job) or is_authorized(request, taigi_web_token_cookie, authorization):
+        return
+    raise HTTPException(status_code=401, detail="Private access required")
 
 
 def content_disposition(filename: str) -> str:
@@ -678,7 +878,7 @@ def run_job(job_id: str, payload: CreateJobRequest):
             (segments_dir / f"seg_{idx:02d}.tailo.txt").write_text(record["tailo_text"], encoding="utf-8")
         jobs.update(job_id, segment_count=len(segment_records), stage=f"Generating {len(segment_records)} audio segments", progress=20)
 
-        voice_mode = payload.reference_voice_mode
+        voice_mode = payload.reference_voice_mode or load_settings().default_reference_voice_mode
         voice_control = payload.control
         reference_audio: Optional[Path] = None
         if voice_mode == "default":
@@ -806,17 +1006,53 @@ async def root():
 @app.post("/auth")
 async def auth(token: Annotated[str, Form()]):
     expected = web_token()
-    if expected and token != expected:
+    if not expected or token != expected:
         raise HTTPException(status_code=401, detail="Invalid token")
     response = JSONResponse({"authenticated": True})
     response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="strict")
     return response
 
 
+@app.post("/auth/magic-link")
+async def request_magic_link(payload: MagicLinkRequest, request: Request):
+    email = payload.email.strip().lower()
+    if email != ADMIN_EMAIL:
+        raise HTTPException(status_code=403, detail="Only the configured admin email can sign in.")
+    enforce_login_rate_limit(request)
+    token = create_magic_token(email)
+    login_url = f"{PUBLIC_URL}/?{urlencode({'token': token})}"
+    try:
+        delivered = send_magic_link_email(email, login_url)
+    except Exception as exc:
+        print(f"Failed to send Taigi magic link email: {exc}. Login URL: {login_url}", flush=True)
+        delivered = False
+    return {"ok": True, "delivered": delivered}
+
+
+@app.post("/auth/verify")
+async def verify_magic_link(payload: VerifyMagicLinkRequest, request: Request):
+    email = consume_magic_token(payload.token)
+    if email != ADMIN_EMAIL:
+        raise HTTPException(status_code=401, detail="Invalid or expired login link.")
+    session = create_admin_session(email)
+    response = JSONResponse({"authenticated": True, "email": email})
+    response.set_cookie(
+        ADMIN_SESSION_COOKIE,
+        session,
+        max_age=SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=request.headers.get("x-forwarded-proto", request.url.scheme) == "https",
+        samesite="lax",
+    )
+    return response
+
+
 @app.post("/auth/logout")
-async def logout():
+async def logout(request: Request):
+    revoke_session(request.cookies.get(ADMIN_SESSION_COOKIE))
     response = JSONResponse({"authenticated": False})
     response.delete_cookie(SESSION_COOKIE)
+    response.delete_cookie(ADMIN_SESSION_COOKIE)
     return response
 
 
@@ -828,19 +1064,22 @@ async def auth_status(
 ):
     return {
         "authenticated": is_authorized(request, taigi_web_token_cookie, authorization),
-        "token_required": bool(web_token()),
+        "token_required": True,
         "loopback_only": not PUBLIC_ACCESS and not bool(web_token()),
         "public_access": PUBLIC_ACCESS,
+        "auth_method": "email_magic_link",
     }
 
 
 @app.get("/api/info")
 async def api_info():
+    settings = load_settings()
     info = {
         "name": "Taigi Voice Video Web",
         "default_device": DEFAULT_DEVICE,
         "default_copy_to_onedrive": DEFAULT_COPY_TO_ONEDRIVE,
-        "public_rate_limit_seconds": RATE_LIMIT_SECONDS,
+        "default_reference_voice_mode": settings.default_reference_voice_mode,
+        "public_rate_limit_seconds": settings.public_rate_limit_seconds,
         "public_access": PUBLIC_ACCESS,
         "reference_voice_modes": [
             {"value": "default", "label": "預設聲音"},
@@ -854,6 +1093,32 @@ async def api_info():
     return info
 
 
+@app.get("/admin/settings")
+async def get_admin_settings(
+    request: Request,
+    taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
+):
+    require_auth(request, taigi_web_token_cookie, authorization)
+    return load_settings()
+
+
+@app.put("/admin/settings")
+async def update_admin_settings(
+    settings: AppSettings,
+    request: Request,
+    taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
+):
+    require_auth(request, taigi_web_token_cookie, authorization)
+    normalized = settings.model_copy(update={
+        "public_rate_limit_seconds": max(60, int(settings.public_rate_limit_seconds)),
+        "api_access_token": settings.api_access_token.strip(),
+    })
+    save_settings(normalized)
+    return normalized
+
+
 @app.post("/jobs")
 async def create_job(
     payload: CreateJobRequest,
@@ -861,10 +1126,13 @@ async def create_job(
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
     authorization: Annotated[Optional[str], Header()] = None,
 ):
-    require_auth(request, taigi_web_token_cookie, authorization)
+    admin_or_token = is_authorized(request, taigi_web_token_cookie, authorization)
+    if not PUBLIC_ACCESS and not admin_or_token:
+        require_auth(request, taigi_web_token_cookie, authorization)
     if not payload.chinese_text.strip():
         raise HTTPException(status_code=400, detail="Chinese text is required")
-    enforce_public_rate_limit(request, payload.chinese_text)
+    if not admin_or_token and not is_private_client(request):
+        enforce_public_rate_limit(request, payload.chinese_text)
     job_id = uuid.uuid4().hex
     payload_title = payload.title.strip()
     display_title = title_from_text(payload.chinese_text) if payload_title in {"", "台語語音影片"} else payload_title
@@ -879,7 +1147,7 @@ async def create_job(
         chinese_text=payload.chinese_text,
     )
     app_data["jobs"].add(job)
-    enqueue_job(0 if is_private_client(request) else 10, job_id, payload)
+    enqueue_job(0 if is_private_client(request) or admin_or_token else 10, job_id, payload)
     return job
 
 
@@ -889,8 +1157,11 @@ async def list_jobs(
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
     authorization: Annotated[Optional[str], Header()] = None,
 ):
-    require_auth(request, taigi_web_token_cookie, authorization)
-    return {"jobs": app_data["jobs"].list()}
+    admin_or_token = is_authorized(request, taigi_web_token_cookie, authorization)
+    jobs = app_data["jobs"].list()
+    if not admin_or_token:
+        jobs = [job for job in jobs if job_is_public(job)]
+    return {"jobs": jobs}
 
 
 @app.get("/jobs/{job_id}")
@@ -900,8 +1171,9 @@ async def get_job(
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
     authorization: Annotated[Optional[str], Header()] = None,
 ):
-    require_auth(request, taigi_web_token_cookie, authorization)
-    return app_data["jobs"].get(job_id)
+    job = app_data["jobs"].get(job_id)
+    require_job_access(job, request, taigi_web_token_cookie, authorization)
+    return job
 
 
 @app.get("/jobs/{job_id}/segments")
@@ -911,8 +1183,8 @@ async def get_job_segments(
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
     authorization: Annotated[Optional[str], Header()] = None,
 ):
-    require_auth(request, taigi_web_token_cookie, authorization)
     job = app_data["jobs"].get(job_id)
+    require_job_access(job, request, taigi_web_token_cookie, authorization)
     output_dir = Path(job.output_dir or JOB_ROOT / job_id / "output")
     segments_path = output_dir / "segments.json"
     if not segments_path.exists():
@@ -934,10 +1206,10 @@ async def save_segment_feedback(
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
     authorization: Annotated[Optional[str], Header()] = None,
 ):
-    require_auth(request, taigi_web_token_cookie, authorization)
     if feedback.rating < 1 or feedback.rating > 5:
         raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
     job = app_data["jobs"].get(job_id)
+    require_job_access(job, request, taigi_web_token_cookie, authorization)
     output_dir = Path(job.output_dir or JOB_ROOT / job_id / "output")
     segments_path = output_dir / "segments.json"
     if not segments_path.exists():
@@ -995,8 +1267,8 @@ async def download_job_file(
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
     authorization: Annotated[Optional[str], Header()] = None,
 ):
-    require_auth(request, taigi_web_token_cookie, authorization)
     job = app_data["jobs"].get(job_id)
+    require_job_access(job, request, taigi_web_token_cookie, authorization)
     if job.status != "complete":
         raise HTTPException(status_code=409, detail="Job is not complete")
     output_dir = Path(job.output_dir or "")
@@ -1023,8 +1295,8 @@ async def download_segment_audio(
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
     authorization: Annotated[Optional[str], Header()] = None,
 ):
-    require_auth(request, taigi_web_token_cookie, authorization)
     job = app_data["jobs"].get(job_id)
+    require_job_access(job, request, taigi_web_token_cookie, authorization)
     output_dir = Path(job.output_dir or "")
     path = output_dir / "segments" / f"seg_{segment_index:02d}.wav"
     if not path.exists():

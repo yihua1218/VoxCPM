@@ -20,6 +20,11 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
+  height: auto;
+  min-height: 88px;
+  line-height: 1.35;
+  padding-top: max(18px, env(safe-area-inset-top));
+  padding-bottom: 14px;
   backdrop-filter: saturate(180%) blur(20px);
   position: sticky;
   top: 0;
@@ -200,6 +205,7 @@ a {
     align-items: flex-start;
     flex-direction: column;
     height: auto;
-    padding: 14px 20px;
+    min-height: 112px;
+    padding: max(18px, env(safe-area-inset-top)) 20px 14px;
   }
 }
