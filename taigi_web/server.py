@@ -203,6 +203,11 @@ class WordAssetRatingRequest(BaseModel):
     note: str = ""
 
 
+class WordTranslationRequest(BaseModel):
+    languages: list[str] = []
+    overwrite: bool = False
+
+
 class JobRatingRequest(BaseModel):
     rating: int
     note: str = ""
@@ -647,7 +652,7 @@ def enqueue_word_generation_job(
         },
     )
     app_data["jobs"].add(job)
-    record_stat_action("create_word_asset_job", "word", word_id, {"job_id": job_id, "auto": auto})
+    record_stat_action("create_word_asset_job", "word", word_id, metadata={"job_id": job_id, "auto": auto})
     enqueue_job(priority, job_id, None)
     return {**word, **word_generation_status(word)}, job
 
@@ -1820,6 +1825,78 @@ def save_word_db(payload: dict):
         WORD_DB.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+SUPPORTED_CORPUS_LANGUAGES = ["zh-Hant", "zh-Hans", "en", "ja", "ko", "taigi", "tailo"]
+
+TRADITIONAL_TO_SIMPLIFIED = str.maketrans({
+    "臺": "台", "灣": "湾", "語": "语", "詞": "词", "辭": "辞", "聲": "声", "音": "音",
+    "體": "体", "產": "产", "業": "业", "學": "学", "習": "习", "資": "资", "庫": "库",
+    "與": "与", "轉": "转", "譯": "译", "記": "记", "錄": "录", "廣": "广", "東": "东",
+    "門": "门", "開": "开", "關": "关", "題": "题", "點": "点", "聽": "听", "說": "说",
+    "講": "讲", "買": "买", "賣": "卖", "這": "这", "個": "个", "會": "会", "後": "后",
+    "時": "时", "間": "间", "數": "数", "據": "据", "網": "网", "頁": "页", "標": "标",
+    "準": "准", "確": "确", "實": "实", "發": "发", "現": "现", "還": "还", "進": "进",
+    "輸": "输", "錯": "错", "對": "对", "國": "国", "電": "电", "腦": "脑", "員": "员",
+})
+
+
+def simplified_text(text: str) -> str:
+    return text.translate(TRADITIONAL_TO_SIMPLIFIED)
+
+
+def word_multilingual_entry(word: dict, lang: str, requester_id: str, requester_name: str, overwrite: bool = False) -> dict:
+    now = time.time()
+    existing = word.setdefault("multilingual", {}).get(lang)
+    if existing and not overwrite:
+        return existing
+    if lang == "zh-Hant":
+        text = word.get("source", "")
+        status = "draft"
+        note = "以原始中文詞條建立。"
+    elif lang == "zh-Hans":
+        text = simplified_text(word.get("source", ""))
+        status = "draft"
+        note = "以保守繁簡字表產生，仍建議人工校對。"
+    elif lang == "taigi":
+        text = word.get("taigi", "")
+        status = "draft"
+        note = "以目前台語詞條建立，可由使用者修正。"
+    elif lang == "tailo":
+        text = word.get("tailo", "") or tailo_for(word.get("taigi", ""))
+        status = "draft"
+        note = "以目前台羅拼音建立，可由使用者修正。"
+    else:
+        text = ""
+        status = "pending"
+        note = "已申請多語系語料，等待人工翻譯或外部翻譯服務補稿。"
+    return {
+        "language": lang,
+        "text": text,
+        "status": status,
+        "note": note,
+        "requested_by_id": requester_id,
+        "requested_by_name": requester_name,
+        "requested_at": now,
+        "updated_at": now,
+    }
+
+
+def request_word_multilingual_corpus(word: dict, languages: list[str], requester_id: str, requester_name: str, overwrite: bool = False) -> dict:
+    requested = [lang for lang in languages if lang in SUPPORTED_CORPUS_LANGUAGES] or SUPPORTED_CORPUS_LANGUAGES
+    multilingual = word.setdefault("multilingual", {})
+    for lang in requested:
+        multilingual[lang] = word_multilingual_entry(word, lang, requester_id, requester_name, overwrite)
+    requests = word.setdefault("multilingual_requests", [])
+    requests.append({
+        "languages": requested,
+        "requested_by_id": requester_id,
+        "requested_by_name": requester_name,
+        "requested_at": time.time(),
+        "overwrite": overwrite,
+    })
+    word["updated_at"] = time.time()
+    return word
+
+
 def remember_word_query(query: str):
     query = query.strip()
     if not query:
@@ -2607,6 +2684,8 @@ async def search_words(
             "has_audio": bool(item.get("has_audio")),
             "has_video": bool(item.get("has_video")),
             "assets": public_word_assets(item, user_id),
+            "multilingual": item.get("multilingual", {}),
+            "multilingual_request_count": len(item.get("multilingual_requests") or []),
             **generation,
             "updated_at": item.get("updated_at"),
             "generated_at": item.get("generated_at"),
@@ -2690,6 +2769,37 @@ async def report_word_issue(word_id: str, payload: WordIssueRequest):
     db["words"][word_id] = word
     save_word_db(db)
     return {"saved": True, "word": {k: word.get(k) for k in ("id", "source", "taigi", "tailo", "problem", "problem_reason")}}
+
+
+@app.post("/words/{word_id}/translations")
+async def request_word_translations(word_id: str, payload: WordTranslationRequest, request: Request, response: Response):
+    db = load_word_db()
+    word = db.get("words", {}).get(word_id)
+    if not word:
+        raise HTTPException(status_code=404, detail={"message": "找不到這個詞語。"})
+    user_id = review_user_id(request, response)
+    requester_name = reviewer_display_name(user_id)
+    word = request_word_multilingual_corpus(
+        word,
+        payload.languages,
+        requester_id=user_id,
+        requester_name=requester_name,
+        overwrite=payload.overwrite,
+    )
+    db["words"][word_id] = word
+    save_word_db(db)
+    record_stat_action("request_word_translations", "word", word_id, metadata={"languages": payload.languages})
+    return {
+        "saved": True,
+        "word": {
+            "id": word.get("id"),
+            "source": word.get("source"),
+            "taigi": word.get("taigi"),
+            "tailo": word.get("tailo"),
+            "multilingual": word.get("multilingual", {}),
+            "multilingual_request_count": len(word.get("multilingual_requests") or []),
+        },
+    }
 
 
 @app.post("/words/{word_id}/assets/{asset_id}/rating")

@@ -54,6 +54,10 @@ const UI_LANGUAGES: Array<{ value: UiLanguage; label: string }> = [
   { value: 'tailo', label: 'Tâi-lô' },
 ];
 
+const UI_LANGUAGE_LABELS: Record<UiLanguage, string> = Object.fromEntries(
+  UI_LANGUAGES.map((item) => [item.value, item.label]),
+) as Record<UiLanguage, string>;
+
 const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
   'zh-Hant': {
     subtitle: '中文稿 → 台語稿 → 語音 → 字幕波形影片',
@@ -61,6 +65,7 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     jobs: '工作總覽',
     lexicon: '語詞資料庫',
     stats: '統計趨勢',
+    sources: '來源授權',
     refresh: '重新整理',
     signOut: '登出',
     public: 'Public',
@@ -74,6 +79,22 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     generateWord: '產生新的語音版本',
     regenerateWord: '申請重新產生語音',
     reportIssue: '回報素材有問題',
+    overviewTitle: '系統概覽',
+    overviewHelp: '公開累計使用狀況',
+    statsTitle: '統計',
+    statsDailyTitle: '每日使用趨勢',
+    actionsTitle: '累計操作',
+    dailyPlay: '播放',
+    dailyShare: '分享',
+    dailyRate: '評分',
+    lexiconTitle: '語詞與固定語句資料庫',
+    lexiconSearch: '查詢中文、台語、台羅、俗語、成語',
+    lexiconEmpty: '目前沒有符合的詞語',
+    sourcesTitle: '來源授權治理台帳',
+    requestCorpus: '申請多語系語料',
+    multilingualCorpus: '多語系語料',
+    pendingReview: '待補稿',
+    draft: '草稿',
   },
   'zh-Hans': {
     subtitle: '中文稿 → 台语稿 → 语音 → 字幕波形影片',
@@ -81,6 +102,7 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     jobs: '工作总览',
     lexicon: '词语数据库',
     stats: '统计趋势',
+    sources: '来源授权',
     refresh: '刷新',
     signOut: '登出',
     public: 'Public',
@@ -94,6 +116,22 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     generateWord: '产生新的语音版本',
     regenerateWord: '申请重新产生语音',
     reportIssue: '回报素材有问题',
+    overviewTitle: '系统概览',
+    overviewHelp: '公开累计使用状况',
+    statsTitle: '统计',
+    statsDailyTitle: '每日使用趋势',
+    actionsTitle: '累计操作',
+    dailyPlay: '播放',
+    dailyShare: '分享',
+    dailyRate: '评分',
+    lexiconTitle: '词语与固定语句数据库',
+    lexiconSearch: '查询中文、台语、台罗、俗语、成语',
+    lexiconEmpty: '目前没有符合的词语',
+    sourcesTitle: '来源授权治理台账',
+    requestCorpus: '申请多语系语料',
+    multilingualCorpus: '多语系语料',
+    pendingReview: '待补稿',
+    draft: '草稿',
   },
   en: {
     subtitle: 'Chinese draft → Taigi draft → Speech → Captioned waveform video',
@@ -101,6 +139,7 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     jobs: 'Jobs',
     lexicon: 'Lexicon',
     stats: 'Stats',
+    sources: 'Sources',
     refresh: 'Refresh',
     signOut: 'Sign out',
     public: 'Public',
@@ -114,6 +153,22 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     generateWord: 'Generate new audio',
     regenerateWord: 'Request regeneration',
     reportIssue: 'Report issue',
+    overviewTitle: 'System Overview',
+    overviewHelp: 'Public cumulative usage',
+    statsTitle: 'Stats',
+    statsDailyTitle: 'Daily Usage Trend',
+    actionsTitle: 'Cumulative Actions',
+    dailyPlay: 'Plays',
+    dailyShare: 'Shares',
+    dailyRate: 'Ratings',
+    lexiconTitle: 'Words and Fixed Phrases',
+    lexiconSearch: 'Search Chinese, Taigi, Tailo, idioms, phrases',
+    lexiconEmpty: 'No matching entries',
+    sourcesTitle: 'Source and License Governance Ledger',
+    requestCorpus: 'Request multilingual corpus',
+    multilingualCorpus: 'Multilingual corpus',
+    pendingReview: 'Pending',
+    draft: 'Draft',
   },
   ja: {
     subtitle: '中国語原稿 → 台湾語原稿 → 音声 → 字幕付き波形動画',
@@ -121,6 +176,7 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     jobs: 'ジョブ一覧',
     lexicon: '語彙データベース',
     stats: '統計',
+    sources: '出典',
     refresh: '更新',
     signOut: 'サインアウト',
     public: 'Public',
@@ -134,6 +190,22 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     generateWord: '新しい音声を生成',
     regenerateWord: '再生成を依頼',
     reportIssue: '問題を報告',
+    overviewTitle: 'システム概要',
+    overviewHelp: '公開累計利用状況',
+    statsTitle: '統計',
+    statsDailyTitle: '日別利用傾向',
+    actionsTitle: '累計操作',
+    dailyPlay: '再生',
+    dailyShare: '共有',
+    dailyRate: '評価',
+    lexiconTitle: '語彙と定型句データベース',
+    lexiconSearch: '中国語、台湾語、台羅、慣用句を検索',
+    lexiconEmpty: '一致する語彙はありません',
+    sourcesTitle: '出典・ライセンス管理台帳',
+    requestCorpus: '多言語コーパス申請',
+    multilingualCorpus: '多言語コーパス',
+    pendingReview: '未翻訳',
+    draft: '草稿',
   },
   ko: {
     subtitle: '중국어 원고 → 대만어 원고 → 음성 → 자막 파형 영상',
@@ -141,6 +213,7 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     jobs: '작업 목록',
     lexicon: '어휘 데이터베이스',
     stats: '통계',
+    sources: '출처',
     refresh: '새로고침',
     signOut: '로그아웃',
     public: 'Public',
@@ -154,6 +227,22 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     generateWord: '새 음성 생성',
     regenerateWord: '재생성 요청',
     reportIssue: '문제 신고',
+    overviewTitle: '시스템 개요',
+    overviewHelp: '공개 누적 사용 현황',
+    statsTitle: '통계',
+    statsDailyTitle: '일별 사용 추세',
+    actionsTitle: '누적 작업',
+    dailyPlay: '재생',
+    dailyShare: '공유',
+    dailyRate: '평점',
+    lexiconTitle: '어휘 및 고정 표현 데이터베이스',
+    lexiconSearch: '중국어, 대만어, Tailo, 관용구 검색',
+    lexiconEmpty: '일치하는 항목이 없습니다',
+    sourcesTitle: '출처 및 라이선스 관리 대장',
+    requestCorpus: '다국어 말뭉치 신청',
+    multilingualCorpus: '다국어 말뭉치',
+    pendingReview: '대기',
+    draft: '초안',
   },
   taigi: {
     subtitle: '華語稿 → 台語稿 → 聲音 → 字幕波形影片',
@@ -161,6 +250,7 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     jobs: '工課總覽',
     lexicon: '語詞資料庫',
     stats: '統計趨勢',
+    sources: '來源授權',
     refresh: '閣整理',
     signOut: '登出',
     public: 'Public',
@@ -174,6 +264,22 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     generateWord: '產生新的聲音版本',
     regenerateWord: '申請閣再產生聲音',
     reportIssue: '回報素材有問題',
+    overviewTitle: '系統概覽',
+    overviewHelp: '公開累計使用狀況',
+    statsTitle: '統計',
+    statsDailyTitle: '逐日使用趨勢',
+    actionsTitle: '累計動作',
+    dailyPlay: '播放',
+    dailyShare: '分享',
+    dailyRate: '評分',
+    lexiconTitle: '語詞佮固定語句資料庫',
+    lexiconSearch: '查中文、台語、台羅、俗語、成語',
+    lexiconEmpty: '目前無符合的語詞',
+    sourcesTitle: '來源授權治理台帳',
+    requestCorpus: '申請多語系語料',
+    multilingualCorpus: '多語系語料',
+    pendingReview: '咧等補稿',
+    draft: '草稿',
   },
   tailo: {
     subtitle: 'Huâ-gí khó → Tâi-gí khó → Siann-im → Jī-bō 波形影片',
@@ -181,6 +287,7 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     jobs: 'Kang-khò chóng-lám',
     lexicon: 'Gí-sû tsu-liāu-khòo',
     stats: 'Thong-kè',
+    sources: 'Guân-thâu',
     refresh: 'Koh tsíng-lí',
     signOut: 'Teng-tshut',
     public: 'Public',
@@ -194,6 +301,151 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     generateWord: 'Sán-sing sin siann-im',
     regenerateWord: 'Tshing-kiû koh sán-sing',
     reportIssue: 'Huê-pòo būn-tê',
+    overviewTitle: 'Hē-thóng khài-lám',
+    overviewHelp: 'Kong-khui luí-ke sú-iōng tsōng-hóng',
+    statsTitle: 'Thong-kè',
+    statsDailyTitle: 'Ji̍t-ji̍t sú-iōng tshu-sè',
+    actionsTitle: 'Luí-ke tōng-tsok',
+    dailyPlay: 'Pòo-hòng',
+    dailyShare: 'Hun-hióng',
+    dailyRate: 'Phîng-hun',
+    lexiconTitle: 'Gí-sû kap kòo-tīng gí-kù tsu-liāu-khòo',
+    lexiconSearch: 'Tshiau Tiong-bûn, Tâi-gí, Tâi-lô, sio̍k-gí',
+    lexiconEmpty: 'Bô ha̍p ê gí-sû',
+    sourcesTitle: 'Guân-thâu sû-khuân tī-lí tâi-tiùnn',
+    requestCorpus: 'Tshing-kiû tō-gí-hē gí-liāu',
+    multilingualCorpus: 'Tō-gí-hē gí-liāu',
+    pendingReview: 'Tán póo-kó',
+    draft: 'Tsháu-kó',
+  },
+};
+
+const ACTION_TEXT: Record<UiLanguage, Record<string, string>> = {
+  'zh-Hant': {
+    play_audio: '播放音訊',
+    play_video: '播放影片',
+    create_job: '建立稿件工作',
+    create_word_asset_job: '建立詞語語音工作',
+    regenerate_job: '用修正稿重新生成',
+    rate_job: '評分音訊影片',
+    rate_segment: '評分分段',
+    rate_word: '評分詞條',
+    rate_word_asset: '評分詞語語音',
+    word_query: '查詢語詞',
+    copy_share_link: '複製分享連結',
+    share_line: '分享到 LINE',
+    share_facebook: '分享到 Facebook',
+    share_x: '分享到 X',
+    request_word_translations: '申請詞條多語系語料',
+    anonymous_nickname_change: '變更匿名暱稱',
+  },
+  'zh-Hans': {
+    play_audio: '播放音频',
+    play_video: '播放影片',
+    create_job: '建立稿件工作',
+    create_word_asset_job: '建立词语语音工作',
+    regenerate_job: '用修正稿重新生成',
+    rate_job: '评分音频影片',
+    rate_segment: '评分分段',
+    rate_word: '评分词条',
+    rate_word_asset: '评分词语语音',
+    word_query: '查询词语',
+    copy_share_link: '复制分享链接',
+    share_line: '分享到 LINE',
+    share_facebook: '分享到 Facebook',
+    share_x: '分享到 X',
+    request_word_translations: '申请词条多语系语料',
+    anonymous_nickname_change: '变更匿名昵称',
+  },
+  en: {
+    play_audio: 'Audio plays',
+    play_video: 'Video plays',
+    create_job: 'Script jobs created',
+    create_word_asset_job: 'Word audio jobs created',
+    regenerate_job: 'Regenerated from corrections',
+    rate_job: 'Media ratings',
+    rate_segment: 'Segment ratings',
+    rate_word: 'Lexicon entry ratings',
+    rate_word_asset: 'Word audio ratings',
+    word_query: 'Lexicon searches',
+    copy_share_link: 'Share links copied',
+    share_line: 'Shared to LINE',
+    share_facebook: 'Shared to Facebook',
+    share_x: 'Shared to X',
+    request_word_translations: 'Multilingual corpus requests',
+    anonymous_nickname_change: 'Anonymous nickname changes',
+  },
+  ja: {
+    play_audio: '音声再生',
+    play_video: '動画再生',
+    create_job: '原稿ジョブ作成',
+    create_word_asset_job: '語彙音声ジョブ作成',
+    regenerate_job: '修正稿から再生成',
+    rate_job: '音声動画評価',
+    rate_segment: '分段評価',
+    rate_word: '語彙評価',
+    rate_word_asset: '語彙音声評価',
+    word_query: '語彙検索',
+    copy_share_link: '共有リンクをコピー',
+    share_line: 'LINE へ共有',
+    share_facebook: 'Facebook へ共有',
+    share_x: 'X へ共有',
+    request_word_translations: '多言語コーパス申請',
+    anonymous_nickname_change: '匿名ニックネーム変更',
+  },
+  ko: {
+    play_audio: '음성 재생',
+    play_video: '영상 재생',
+    create_job: '원고 작업 생성',
+    create_word_asset_job: '어휘 음성 작업 생성',
+    regenerate_job: '수정본으로 재생성',
+    rate_job: '음성/영상 평점',
+    rate_segment: '분단 평점',
+    rate_word: '어휘 평점',
+    rate_word_asset: '어휘 음성 평점',
+    word_query: '어휘 검색',
+    copy_share_link: '공유 링크 복사',
+    share_line: 'LINE 공유',
+    share_facebook: 'Facebook 공유',
+    share_x: 'X 공유',
+    request_word_translations: '다국어 말뭉치 신청',
+    anonymous_nickname_change: '익명 닉네임 변경',
+  },
+  taigi: {
+    play_audio: '播放聲音',
+    play_video: '播放影片',
+    create_job: '建立稿件工課',
+    create_word_asset_job: '建立語詞聲音工課',
+    regenerate_job: '用修正稿閣生成',
+    rate_job: '評分聲音影片',
+    rate_segment: '評分分段',
+    rate_word: '評分語詞',
+    rate_word_asset: '評分語詞聲音',
+    word_query: '查語詞',
+    copy_share_link: '複製分享連結',
+    share_line: '分享到 LINE',
+    share_facebook: '分享到 Facebook',
+    share_x: '分享到 X',
+    request_word_translations: '申請語詞多語系語料',
+    anonymous_nickname_change: '改匿名暱稱',
+  },
+  tailo: {
+    play_audio: 'Pòo-hòng siann-im',
+    play_video: 'Pòo-hòng iánn-phìnn',
+    create_job: 'Kiàn-li̍p khó kang-khò',
+    create_word_asset_job: 'Kiàn-li̍p gí-sû siann-im kang-khò',
+    regenerate_job: 'Iōng siu-tsìnn khó koh sán-sing',
+    rate_job: 'Siann-im iánn-phìnn phîng-hun',
+    rate_segment: 'Hun-tuānn phîng-hun',
+    rate_word: 'Gí-sû phîng-hun',
+    rate_word_asset: 'Gí-sû siann-im phîng-hun',
+    word_query: 'Tshiau gí-sû',
+    copy_share_link: 'Khóo-pih hun-hióng liân-kiat',
+    share_line: 'Hun-hióng kàu LINE',
+    share_facebook: 'Hun-hióng kàu Facebook',
+    share_x: 'Hun-hióng kàu X',
+    request_word_translations: 'Tshing-kiû gí-sû tō-gí-hē gí-liāu',
+    anonymous_nickname_change: 'Kái bû-miâ phiau-hō',
   },
 };
 
@@ -368,6 +620,16 @@ interface WordEntry {
   generation_position?: number;
   generation_job_id?: string;
   assets?: WordAsset[];
+  multilingual?: Record<string, {
+    language: string;
+    text: string;
+    status: 'draft' | 'pending' | 'reviewed';
+    note?: string;
+    requested_by_name?: string;
+    requested_at?: number;
+    updated_at?: number;
+  }>;
+  multilingual_request_count?: number;
 }
 
 interface WordAsset {
@@ -535,7 +797,7 @@ const exampleTexts = [
 ];
 
 function validPageTab(value: string | null) {
-  return value === 'work' || value === 'jobs' || value === 'lexicon' || value === 'stats';
+  return value === 'work' || value === 'jobs' || value === 'lexicon' || value === 'stats' || value === 'sources';
 }
 
 function initialPageTab() {
@@ -605,6 +867,7 @@ function App() {
   const signedIn = !!auth?.authenticated;
   const isAdmin = !!auth?.is_admin;
   const t = (key: string) => UI_TEXT[uiLanguage]?.[key] ?? UI_TEXT['zh-Hant'][key] ?? key;
+  const actionLabel = (key: string) => ACTION_TEXT[uiLanguage]?.[key] ?? ACTION_TEXT['zh-Hant'][key] ?? key;
   const jobDisplayTitle = (job: Job) => firstSentence(job.chinese_text) || job.title;
   const jobGroups = useMemo(() => ([
     { key: 'running', label: '處理中', jobs: jobs.filter((job) => job.status === 'running') },
@@ -1121,6 +1384,21 @@ function App() {
     }
   };
 
+  const requestWordCorpus = async (word: WordEntry) => {
+    try {
+      await axios.post(`/words/${word.id}/translations`, {
+        languages: UI_LANGUAGES.map((item) => item.value),
+        overwrite: false,
+      });
+      await loadWords();
+      await loadStats().catch(() => undefined);
+      message.success('已建立這筆詞條的多語系語料申請');
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      message.error((detail && typeof detail === 'object' ? detail.message : detail) || '無法申請多語系語料');
+    }
+  };
+
   return (
     <ConfigProvider
       theme={{
@@ -1157,6 +1435,7 @@ function App() {
               { key: 'jobs', label: t('jobs') },
               { key: 'lexicon', label: t('lexicon') },
               { key: 'stats', label: t('stats') },
+              { key: 'sources', label: t('sources') },
             ].map((item) => (
               <button
                 key={item.key}
@@ -1205,7 +1484,7 @@ function App() {
 
         <Content className="app-content">
             <div className={`app-grid ${
-              activeTab === 'lexicon' ? 'show-lexicon' : activeTab === 'jobs' ? 'show-jobs' : activeTab === 'stats' ? 'show-stats' : 'show-work'
+              activeTab === 'lexicon' ? 'show-lexicon' : activeTab === 'jobs' ? 'show-jobs' : activeTab === 'stats' ? 'show-stats' : activeTab === 'sources' ? 'show-sources' : 'show-work'
             }`}>
               <Space direction="vertical" size={16} style={{ width: '100%' }}>
                 <Card className="create-job-card">
@@ -1599,8 +1878,8 @@ function App() {
               <Space direction="vertical" size={16} style={{ width: '100%' }}>
                 <Card className="side-stats-card">
                   <div className="card-title">
-                    <Title level={4} style={{ margin: 0 }}>系統概覽</Title>
-                    <Text type="secondary">公開累計使用狀況</Text>
+                    <Title level={4} style={{ margin: 0 }}>{t('overviewTitle')}</Title>
+                    <Text type="secondary">{t('overviewHelp')}</Text>
                   </div>
                   {!stats ? (
                     <Alert type="info" showIcon message="正在載入統計" />
@@ -1739,8 +2018,8 @@ function App() {
 
                 <Card className="stats-card">
                   <Flex align="center" justify="space-between" className="card-title" gap={12}>
-                    <Title level={3} style={{ margin: 0 }}>統計</Title>
-                    <Button size="small" onClick={() => loadStats().catch(() => undefined)}>更新</Button>
+                    <Title level={3} style={{ margin: 0 }}>{t('statsTitle')}</Title>
+                    <Button size="small" onClick={() => loadStats().catch(() => undefined)}>{t('refresh')}</Button>
                   </Flex>
                   {!stats ? (
                     <Alert type="info" showIcon message="正在載入統計" />
@@ -1758,7 +2037,7 @@ function App() {
                   )}
                   {stats && (
                     <div className="stats-trends">
-                      <Title level={4}>每日使用趨勢</Title>
+                      <Title level={4}>{t('statsDailyTitle')}</Title>
                       {(stats.daily ?? []).slice(-14).map((day) => {
                         const maxDaily = Math.max(1, ...(stats.daily ?? []).map((item) => item.total || 0));
                         return (
@@ -1769,18 +2048,18 @@ function App() {
                             </div>
                             <Text>{day.total || 0}</Text>
                             <Text type="secondary">
-                              播放 {(day.actions?.play_audio || 0) + (day.actions?.play_video || 0)}
-                              {' '}分享 {(day.actions?.copy_share_link || 0) + (day.actions?.share_line || 0) + (day.actions?.share_facebook || 0) + (day.actions?.share_x || 0)}
-                              {' '}評分 {(day.actions?.rate_job || 0) + (day.actions?.rate_word || 0) + (day.actions?.rate_segment || 0)}
+                              {t('dailyPlay')} {(day.actions?.play_audio || 0) + (day.actions?.play_video || 0)}
+                              {' '}{t('dailyShare')} {(day.actions?.copy_share_link || 0) + (day.actions?.share_line || 0) + (day.actions?.share_facebook || 0) + (day.actions?.share_x || 0)}
+                              {' '}{t('dailyRate')} {(day.actions?.rate_job || 0) + (day.actions?.rate_word || 0) + (day.actions?.rate_segment || 0)}
                             </Text>
                           </div>
                         );
                       })}
-                      <Title level={4}>累計操作</Title>
+                      <Title level={4}>{t('actionsTitle')}</Title>
                       <div className="action-grid">
                         {Object.entries(stats.actions ?? {}).sort((a, b) => b[1] - a[1]).map(([action, count]) => (
                           <div key={action}>
-                            <Text type="secondary">{action}</Text>
+                            <Text type="secondary">{actionLabel(action)}</Text>
                             <strong>{count}</strong>
                           </div>
                         ))}
@@ -1789,21 +2068,233 @@ function App() {
                   )}
                 </Card>
 
+                <Card className="sources-card">
+                  <div className="card-title">
+                    <Title level={3} style={{ margin: 0 }}>{t('sourcesTitle')}</Title>
+                    <Paragraph type="secondary">
+                      這裡按照公開營運前的授權治理建議，記錄每個工具、模型、辭源與公開資料庫的來源、授權狀態、本站用途與治理動作。
+                      「待確認」的資料只做人工查詢或校稿參考，不直接批次匯入、再散布或作為可下載資料庫。
+                    </Paragraph>
+                  </div>
+                  <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                    <div className="source-section">
+                      <Flex align="center" justify="space-between" gap={12} wrap>
+                        <Title level={4}>授權狀態分類</Title>
+                        <Space wrap>
+                          <Tag color="success">可納入系統依賴</Tag>
+                          <Tag color="processing">本站自有/使用者貢獻</Tag>
+                          <Tag color="warning">待確認後再匯入</Tag>
+                          <Tag color="error">不得匯入</Tag>
+                        </Space>
+                      </Flex>
+                      <div className="governance-grid">
+                        <div>
+                          <Text strong>可納入系統依賴</Text>
+                          <Text type="secondary">開源授權明確，可作為程式、模型或工具使用；仍需保留授權文字與來源連結。</Text>
+                        </div>
+                        <div>
+                          <Text strong>本站自有/使用者貢獻</Text>
+                          <Text type="secondary">由本站建立或使用者回饋產生，需在服務條款中說明投稿資料可被用於改進轉譯與語音生成。</Text>
+                        </div>
+                        <div>
+                          <Text strong>待確認後再匯入</Text>
+                          <Text type="secondary">可人工參考，但正式匯入 SQLite、開放查詢或輸出檔案前，需要確認可商用、可改作、可再散布與署名條件。</Text>
+                        </div>
+                        <div>
+                          <Text strong>不得匯入</Text>
+                          <Text type="secondary">沒有可再利用授權、禁止爬取、禁止商用或只允許個人瀏覽的資料，不放入本站資料庫。</Text>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="source-section">
+                      <Title level={4}>模型、工具與框架</Title>
+                      <div className="source-table">
+                        <div className="source-row source-row-head">
+                          <Text strong>來源</Text>
+                          <Text strong>授權/狀態</Text>
+                          <Text strong>本站用途</Text>
+                          <Text strong>治理動作</Text>
+                        </div>
+                        <div className="source-row">
+                          <div>
+                            <Text strong>VoxCPM / VoxCPM2</Text>
+                            <Typography.Link href="https://github.com/OpenBMB/VoxCPM" target="_blank">GitHub</Typography.Link>
+                            <Typography.Link href="https://huggingface.co/openbmb/VoxCPM2" target="_blank">Hugging Face model</Typography.Link>
+                          </div>
+                          <div><Tag color="success">Apache-2.0</Tag><Text type="secondary">本機 README、LICENSE、pyproject 均標示 Apache-2.0。</Text></div>
+                          <Text type="secondary">依台語稿與參考聲音產生 wav 語音，並供影片流程使用。</Text>
+                          <Text type="secondary">保留 LICENSE；公開頁標示 AI 生成；禁止冒名、詐欺、誤導用途。</Text>
+                        </div>
+                        <div className="source-row">
+                          <div>
+                            <Text strong>PyTorch / torchaudio</Text>
+                            <Typography.Link href="https://pytorch.org/" target="_blank">PyTorch</Typography.Link>
+                            <Typography.Link href="https://github.com/pytorch/audio" target="_blank">torchaudio</Typography.Link>
+                          </div>
+                          <div><Tag color="success">BSD-style</Tag><Text type="secondary">本機 torch metadata 顯示 BSD-3-Clause。</Text></div>
+                          <Text type="secondary">提供 MPS/CPU 推論與音訊張量處理基礎。</Text>
+                          <Text type="secondary">保留第三方授權清單；升級版本時重跑 license audit。</Text>
+                        </div>
+                        <div className="source-row">
+                          <div>
+                            <Text strong>taibun</Text>
+                            <Typography.Link href="https://github.com/andreihar/taibun" target="_blank">GitHub</Typography.Link>
+                            <Typography.Link href="https://pypi.org/project/taibun/" target="_blank">PyPI</Typography.Link>
+                          </div>
+                          <div><Tag color="success">MIT</Tag><Text type="secondary">本機套件 metadata 顯示 MIT。</Text></div>
+                          <Text type="secondary">台語文字轉台羅拼音，供字幕、分段檢視與校稿使用。</Text>
+                          <Text type="secondary">保留套件版本與授權；台羅結果仍允許人工修正。</Text>
+                        </div>
+                        <div className="source-row">
+                          <div>
+                            <Text strong>jieba</Text>
+                            <Typography.Link href="https://github.com/fxsjy/jieba" target="_blank">GitHub</Typography.Link>
+                            <Typography.Link href="https://pypi.org/project/jieba/" target="_blank">PyPI</Typography.Link>
+                          </div>
+                          <div><Tag color="success">MIT</Tag><Text type="secondary">本機套件 metadata 顯示 MIT。</Text></div>
+                          <Text type="secondary">中文分詞，從稿件產生詞語資料庫候選詞。</Text>
+                          <Text type="secondary">分詞只作候選；需搭配人工評分與回報降低錯詞進入資料庫。</Text>
+                        </div>
+                        <div className="source-row">
+                          <div>
+                            <Text strong>FastAPI / Uvicorn</Text>
+                            <Typography.Link href="https://fastapi.tiangolo.com/" target="_blank">FastAPI</Typography.Link>
+                            <Typography.Link href="https://www.uvicorn.org/" target="_blank">Uvicorn</Typography.Link>
+                          </div>
+                          <div><Tag color="success">開源依賴</Tag><Text type="secondary">以套件 metadata 與官方 repository 為準。</Text></div>
+                          <Text type="secondary">API、工作佇列、檔案下載、登入與管理端點。</Text>
+                          <Text type="secondary">部署版本固定；升級前檢查授權與安全更新。</Text>
+                        </div>
+                        <div className="source-row">
+                          <div>
+                            <Text strong>React / Ant Design / Vite</Text>
+                            <Typography.Link href="https://react.dev/" target="_blank">React</Typography.Link>
+                            <Typography.Link href="https://ant.design/" target="_blank">Ant Design</Typography.Link>
+                            <Typography.Link href="https://vite.dev/" target="_blank">Vite</Typography.Link>
+                          </div>
+                          <div><Tag color="success">MIT / Apache-2.0</Tag><Text type="secondary">本機 npm metadata：React、Ant Design、Vite 為 MIT；TypeScript 為 Apache-2.0。</Text></div>
+                          <Text type="secondary">Web UI、表單、評分、分頁、統計與來源授權頁。</Text>
+                          <Text type="secondary">保留前端依賴版本；公開部署前建立 dependency notice。</Text>
+                        </div>
+                        <div className="source-row">
+                          <div>
+                            <Text strong>FFmpeg / FFprobe</Text>
+                            <Typography.Link href="https://ffmpeg.org/" target="_blank">FFmpeg</Typography.Link>
+                            <Typography.Link href="https://ffmpeg.org/legal.html" target="_blank">Legal</Typography.Link>
+                            <Typography.Link href="https://formulae.brew.sh/formula/ffmpeg" target="_blank">Homebrew formula</Typography.Link>
+                          </div>
+                          <div>
+                            <Tag color="warning">GPL-3.0-or-later build</Tag>
+                            <Text type="secondary">
+                              目前部署使用 /opt/homebrew/bin/ffmpeg 8.1；Homebrew formula 標示 GPL-3.0-or-later。
+                              編譯參數包含 --enable-gpl、libx264、libx265，未見 --enable-nonfree。
+                            </Text>
+                          </div>
+                          <Text type="secondary">
+                            Server-side only：合併音訊、讀取時長、使用 libx264/aac 輸出字幕波形 mp4；目前未把 FFmpeg binary 提供下載或包進前端。
+                          </Text>
+                          <Text type="secondary">
+                            短期：保留版本、路徑、Homebrew formula、編譯參數與 Legal 連結。長期若要降低散布義務，改建 LGPL-only FFmpeg 並避免 libx264/libx265，例如改用可接受的系統 encoder。
+                          </Text>
+                        </div>
+                        <div className="source-row">
+                          <div>
+                            <Text strong>SQLite / PostgreSQL</Text>
+                            <Typography.Link href="https://www.sqlite.org/copyright.html" target="_blank">SQLite copyright</Typography.Link>
+                            <Typography.Link href="https://www.postgresql.org/about/licence/" target="_blank">PostgreSQL license</Typography.Link>
+                          </div>
+                          <div><Tag color="success">資料儲存工具</Tag><Text type="secondary">SQLite public domain；PostgreSQL 使用 PostgreSQL License。</Text></div>
+                          <Text type="secondary">保存 Jobs、詞語、評分、統計、匿名暱稱與備份匯出。</Text>
+                          <Text type="secondary">資料庫內每筆外部匯入資料需保留 source、license、retrieved_at 欄位。</Text>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="source-section">
+                      <Title level={4}>辭源、固定語句與公開資料庫</Title>
+                      <div className="source-table">
+                        <div className="source-row source-row-head">
+                          <Text strong>來源</Text>
+                          <Text strong>授權/狀態</Text>
+                          <Text strong>本站用途</Text>
+                          <Text strong>治理動作</Text>
+                        </div>
+                        <div className="source-row">
+                          <div>
+                            <Text strong>內建種子語詞</Text>
+                            <Text type="secondary">逐家好、歹勢、毋免客氣、食果子拜樹頭等。</Text>
+                          </div>
+                          <div><Tag color="processing">本站整理</Tag><Text type="secondary">人工整理的起始資料。</Text></div>
+                          <Text type="secondary">作為查詢、測試、分詞與語音生成的初始詞庫。</Text>
+                          <Text type="secondary">每筆保留建立者、建立時間、後續修正與評分紀錄。</Text>
+                        </div>
+                        <div className="source-row">
+                          <div>
+                            <Text strong>使用者查詢、生成、評分與修正</Text>
+                            <Text type="secondary">本站使用過程自然累積。</Text>
+                          </div>
+                          <div><Tag color="processing">使用者貢獻</Tag><Text type="secondary">需在服務條款明示可用於改善本站資料庫。</Text></div>
+                          <Text type="secondary">建立轉譯記憶、語詞資料庫、音訊版本排序與品質評分。</Text>
+                          <Text type="secondary">匿名者保留匿名暱稱與歷史；登入者保留 email 識別；允許更改自己的評分。</Text>
+                        </div>
+                        <div className="source-row">
+                          <div>
+                            <Text strong>教育部臺灣台語常用詞辭典</Text>
+                            <Typography.Link href="https://sutian.moe.edu.tw/" target="_blank">辭典首頁</Typography.Link>
+                            <Typography.Link href="https://sutian.moe.edu.tw/zh-hant/hunshiong/" target="_blank">資料下載/附錄</Typography.Link>
+                          </div>
+                          <div><Tag color="warning">待正式確認</Tag><Text type="secondary">可公開查詢與下載，但批次匯入、商用與再散布條件需逐項確認。</Text></div>
+                          <Text type="secondary">目前只作人工校稿與查詞參考，不自動大量匯入本站 SQLite。</Text>
+                          <Text type="secondary">正式匯入前記錄授權條款、下載日期、版本、引用文字與可否再散布。</Text>
+                        </div>
+                        <div className="source-row">
+                          <div>
+                            <Text strong>ChhoeTaigi / iTaigi 類型社群資源</Text>
+                            <Typography.Link href="https://chhoe.taigi.info/" target="_blank">ChhoeTaigi</Typography.Link>
+                            <Typography.Link href="https://itaigi.tw/" target="_blank">iTaigi</Typography.Link>
+                            <Typography.Link href="https://github.com/ChhoeTaigi/ChhoeTaigiDatabase" target="_blank">ChhoeTaigiDatabase</Typography.Link>
+                          </div>
+                          <div><Tag color="warning">待資料集逐項確認</Tag><Text type="secondary">不同子資料來源可能有不同授權。</Text></div>
+                          <Text type="secondary">作為人工查詞、比較譯法與候選語詞整理參考。</Text>
+                          <Text type="secondary">若要匯入，需只匯入授權明確且允許本站用途的子集，並保留 source_id。</Text>
+                        </div>
+                        <div className="source-row">
+                          <div>
+                            <Text strong>其他公開辭典、論文、語料與新聞內容</Text>
+                            <Text type="secondary">未列入本站自動資料源。</Text>
+                          </div>
+                          <div><Tag color="error">預設不得匯入</Tag><Text type="secondary">除非授權條款明確允許。</Text></div>
+                          <Text type="secondary">可供人類查閱後撰寫自己的修正，但不直接爬取或複製進資料庫。</Text>
+                          <Text type="secondary">新增來源前需通過授權欄位審核：license、commercial_use、redistribution、attribution。</Text>
+                        </div>
+                      </div>
+                    </div>
+
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="公開營運前的資料治理規則"
+                      description="正式匯入外部資料前，每筆來源都要有 source_url、license_name、license_url、retrieved_at、version、commercial_use、redistribution、attribution_required 與 notes。未確認可再利用的資料只能做人工查詢參考，不批次匯入、不提供下載、不混入本站自有詞庫。"
+                    />
+                  </Space>
+                </Card>
+
                 <Card className="lexicon-card">
                   <Flex align="center" justify="space-between" className="card-title" gap={12}>
-                    <Title level={3} style={{ margin: 0 }}>語詞與固定語句資料庫</Title>
+                    <Title level={3} style={{ margin: 0 }}>{t('lexiconTitle')}</Title>
                     <Text type="secondary">{words.length} shown</Text>
                   </Flex>
                   <Input.Search
                     allowClear
-                    placeholder="查詢中文、台語、台羅、俗語、成語"
+                    placeholder={t('lexiconSearch')}
                     value={wordQuery}
                     onChange={(event) => setWordQuery(event.target.value)}
                     onSearch={(value) => loadWords(value)}
                     style={{ marginBottom: 12 }}
                   />
                   {words.length === 0 ? (
-                    <Alert type="info" showIcon message="目前沒有符合的詞語" />
+                    <Alert type="info" showIcon message={t('lexiconEmpty')} />
                   ) : (
                     <Space direction="vertical" size={10} style={{ width: '100%' }}>
                       {words.map((word) => (
@@ -1851,6 +2342,29 @@ function App() {
                               message={word.generation_stage || '詞語語音生成狀態'}
                               description={word.generation_status === 'queued' && word.generation_position ? `目前排第 ${word.generation_position} 個。` : word.generation_error}
                             />
+                          )}
+                          {word.multilingual && Object.keys(word.multilingual).length > 0 && (
+                            <div className="word-corpus-panel">
+                              <Text strong>{t('multilingualCorpus')}</Text>
+                              <div className="word-corpus-grid">
+                                {UI_LANGUAGES.map((lang) => {
+                                  const item = word.multilingual?.[lang.value];
+                                  return (
+                                    <div key={lang.value} className={item?.status === 'pending' ? 'is-pending' : ''}>
+                                      <Flex align="center" justify="space-between" gap={6}>
+                                        <Text strong>{UI_LANGUAGE_LABELS[lang.value]}</Text>
+                                        <Tag color={item?.status === 'pending' ? 'warning' : 'processing'}>
+                                          {item?.status === 'pending' ? t('pendingReview') : item ? t('draft') : 'none'}
+                                        </Tag>
+                                      </Flex>
+                                      <Text type={item?.text ? undefined : 'secondary'}>
+                                        {item?.text || item?.note || '等待補稿'}
+                                      </Text>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
                           )}
                           {(word.assets ?? []).length > 0 && (
                             <Space direction="vertical" size={10} style={{ width: '100%' }}>
@@ -1914,6 +2428,9 @@ function App() {
                               </Button>
                               <Button size="small" onClick={() => reportWordIssue(word)}>
                                 {t('reportIssue')}
+                              </Button>
+                              <Button size="small" onClick={() => requestWordCorpus(word)}>
+                                {t('requestCorpus')}
                               </Button>
                             </Space>
                           </Flex>
