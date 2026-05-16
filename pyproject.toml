@@ -51,7 +51,8 @@ dependencies = [
     "spaces",
     "argbind",
     "safetensors",
-    "uvicorn"
+    "uvicorn",
+    "psycopg[binary]"
 
 ]
 

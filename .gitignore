@@ -31,6 +31,7 @@ env/
 app_local.py
 .env
 .env.*
+!.env.example
 
 # Model, dataset, and generated media artifacts
 pretrained_models/

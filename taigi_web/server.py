@@ -3,6 +3,7 @@ import os
 import random
 import re
 import secrets
+import sqlite3
 import smtplib
 import shutil
 import subprocess
@@ -19,19 +20,52 @@ from threading import Lock, Thread
 from typing import Annotated, Literal, Optional
 from urllib.parse import quote, urlencode
 
-from fastapi import Cookie, FastAPI, Form, Header, HTTPException, Request
+from fastapi import Cookie, FastAPI, Form, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageDraw, ImageFont
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 try:
     from taibun import Converter
 except Exception:  # pragma: no cover
     Converter = None
 
+try:
+    import jieba
+except Exception:  # pragma: no cover
+    jieba = None
+
+try:
+    import psycopg
+    from psycopg import sql
+    from psycopg.types.json import Jsonb
+except Exception:  # pragma: no cover
+    psycopg = None
+    sql = None
+    Jsonb = None
+
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_env_file(path: Path):
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        value = value.strip().strip('"').strip("'")
+        os.environ[key] = value
+
+
+load_env_file(ROOT / ".env")
+
 JOB_ROOT = Path(os.environ.get("TAIGI_WEB_JOB_DIR", ROOT / "taigi_web_jobs"))
 FRONTEND_DIST = Path(os.environ.get("TAIGI_WEB_FRONTEND_DIST", ROOT / "taigi_web" / "frontend" / "dist"))
 CACHE_DIR = Path(os.environ.get("TAIGI_WEB_MODEL_CACHE", ROOT / "pretrained_models" / "hf-cache"))
@@ -42,9 +76,15 @@ VOXCPM_BIN = os.environ.get("TAIGI_WEB_VOXCPM_BIN") or shutil.which("voxcpm") or
 DEFAULT_DEVICE = os.environ.get("TAIGI_WEB_DEFAULT_DEVICE", "mps")
 DEFAULT_COPY_TO_ONEDRIVE = os.environ.get("TAIGI_WEB_COPY_TO_ONEDRIVE", "1").lower() not in {"0", "false", "no", "off"}
 TRANSLATION_MEMORY = Path(os.environ.get("TAIGI_WEB_TRANSLATION_MEMORY", JOB_ROOT / "translation_memory.json"))
+WORD_DB = Path(os.environ.get("TAIGI_WEB_WORD_DB", JOB_ROOT / "word_db.json"))
+WORD_ASSET_DIR = Path(os.environ.get("TAIGI_WEB_WORD_ASSET_DIR", JOB_ROOT / "word_assets"))
+WORD_AUTO_GENERATE_INTERVAL_SECONDS = int(os.environ.get("TAIGI_WEB_WORD_AUTO_GENERATE_INTERVAL_SECONDS", "1800"))
+STATS_PATH = Path(os.environ.get("TAIGI_WEB_STATS", JOB_ROOT / "stats.json"))
+SQLITE_DB = Path(os.environ.get("TAIGI_WEB_SQLITE_DB", JOB_ROOT / "taigi_web.sqlite3"))
 PUBLIC_ACCESS = os.environ.get("TAIGI_WEB_PUBLIC_ACCESS", "1").lower() not in {"0", "false", "no", "off"}
 SESSION_COOKIE = "taigi_web_token"
 ADMIN_SESSION_COOKIE = "taigi_admin_session"
+REVIEWER_COOKIE = "taigi_reviewer_id"
 ADMIN_EMAIL = (os.environ.get("TAIGI_WEB_ADMIN_EMAIL") or os.environ.get("ADMIN_EMAIL") or "yihua1218@gmail.com").strip().lower()
 PUBLIC_URL = os.environ.get("TAIGI_WEB_PUBLIC_URL") or os.environ.get("PUBLIC_URL") or "https://taigi.yihua.app"
 AUTH_STORE = JOB_ROOT / "auth_store.json"
@@ -53,11 +93,16 @@ SESSION_TTL_SECONDS = int(os.environ.get("TAIGI_WEB_SESSION_TTL_SECONDS", str(60
 memory_lock = Lock()
 auth_lock = Lock()
 rate_limit_lock = Lock()
+word_db_lock = Lock()
+stats_lock = Lock()
+db_lock = Lock()
 rate_limit_seen: dict[str, float] = {}
 job_queue: PriorityQueue = PriorityQueue()
 job_counter_lock = Lock()
 job_counter = 0
 RATE_LIMIT_SECONDS = int(os.environ.get("TAIGI_WEB_PUBLIC_JOB_INTERVAL_SECONDS", "600"))
+POSTGRES_DSN = os.environ.get("TAIGI_WEB_POSTGRES_DSN", "").strip()
+POSTGRES_SCHEMA = os.environ.get("TAIGI_WEB_POSTGRES_SCHEMA", "public").strip() or "public"
 SETTINGS_PATH = JOB_ROOT / "admin_settings.json"
 
 
@@ -83,14 +128,30 @@ class VerifyMagicLinkRequest(BaseModel):
     token: str
 
 
+class AnonymousNicknameRequest(BaseModel):
+    nickname: str
+
+
 class AppSettings(BaseModel):
     default_reference_voice_mode: Literal["default", "random"] = "default"
     public_rate_limit_seconds: int = RATE_LIMIT_SECONDS
     api_access_token: str = ""
+    postgres_dsn: str = POSTGRES_DSN
+    postgres_schema: str = POSTGRES_SCHEMA
+
+
+class PostgresExportResult(BaseModel):
+    exported: bool
+    schema_name: str
+    kv_rows: int
+    job_rows: int
+    exported_at: float
 
 
 class Job(BaseModel):
     id: str
+    kind: Literal["script", "word_asset"] = "script"
+    owner_id: Optional[str] = None
     title: str
     status: Literal["queued", "running", "complete", "failed"]
     stage: str
@@ -110,6 +171,7 @@ class Job(BaseModel):
     zip_path: Optional[str] = None
     onedrive_dir: Optional[str] = None
     error: Optional[str] = None
+    metadata: dict = Field(default_factory=dict)
 
 
 class SegmentCorrection(BaseModel):
@@ -127,6 +189,68 @@ class SegmentFeedback(BaseModel):
     corrections: list[SegmentCorrection] = []
 
 
+class WordIssueRequest(BaseModel):
+    reason: str = ""
+
+
+class WordRatingRequest(BaseModel):
+    rating: int
+    note: str = ""
+
+
+class WordAssetRatingRequest(BaseModel):
+    rating: int
+    note: str = ""
+
+
+class JobRatingRequest(BaseModel):
+    rating: int
+    note: str = ""
+
+
+class StatActionRequest(BaseModel):
+    action: str
+    target_type: str = ""
+    target_id: str = ""
+    metadata: dict = {}
+
+
+FIXED_PHRASE_SEEDS = [
+    {"source": "一兼二顧", "taigi": "一兼二顧", "tailo": "tsi̍t ki兼 nn̄g kòo", "category": "俗語", "note": "一件事同時照顧兩種目的。"},
+    {"source": "食果子拜樹頭", "taigi": "食果子拜樹頭", "tailo": "tsia̍h kué-tsí pài tshiū-thâu", "category": "俗諺", "note": "飲水思源。"},
+    {"source": "有燒香有保庇", "taigi": "有燒香有保庇", "tailo": "ū sio-hiunn ū pó-pì", "category": "俗用", "note": "有準備、有做功課較安心。"},
+    {"source": "慢慢仔來", "taigi": "慢慢仔來", "tailo": "bān-bān-á lâi", "category": "固定語句", "note": "不用急，慢慢來。"},
+    {"source": "歹勢", "taigi": "歹勢", "tailo": "pháinn-sè", "category": "常用語", "note": "不好意思、抱歉。"},
+    {"source": "袂䆀", "taigi": "袂䆀", "tailo": "bē-bái", "category": "常用語", "note": "不錯。"},
+    {"source": "毋免客氣", "taigi": "毋免客氣", "tailo": "m̄-bián kheh-khì", "category": "固定語句", "note": "不用客氣。"},
+    {"source": "逐家好", "taigi": "逐家好", "tailo": "ta̍k-ke-hó", "category": "固定語句", "note": "大家好。"},
+    {"source": "早安", "taigi": "早安", "tailo": "tsá-an", "category": "常用語", "note": "早安。"},
+    {"source": "有影無", "taigi": "有影無", "tailo": "ū-iánn-bô", "category": "俗用", "note": "真的假的？"},
+    {"source": "講予逐家聽", "taigi": "講予逐家聽", "tailo": "kóng hōo ta̍k-ke thiann", "category": "固定語句", "note": "說給大家聽。"},
+    {"source": "愈來愈", "taigi": "愈來愈", "tailo": "jú-lâi-jú", "category": "固定語句", "note": "越來越。"},
+]
+
+
+ANON_TAIGI_NICKNAMES = [
+    "海口阿明",
+    "山線阿蘭",
+    "府城阿和",
+    "艋舺阿月",
+    "打狗阿志",
+    "鹿港阿珠",
+    "諸羅阿賢",
+    "蘭陽阿琴",
+    "笨港阿義",
+    "大稻埕阿美",
+    "鳳山阿昌",
+    "彰化阿敏",
+    "淡水阿清",
+    "埔里阿惠",
+    "恆春阿良",
+    "斗六阿芳",
+]
+
+
 RANDOM_VOICE_CONTROLS = [
     "闽南话，台湾口音，成年男性，声音温和自然，语速正常，像广播旁白",
     "闽南话，台湾口音，成年男性，声音低沉稳定，语气亲切，语速稍慢",
@@ -134,6 +258,46 @@ RANDOM_VOICE_CONTROLS = [
     "闽南话，台湾口音，年轻男性，声音明亮，有精神，语速正常",
     "闽南话，台湾口音，年轻女性，声音轻松自然，语气亲切，语速正常",
 ]
+
+VOICE_CONTROL_OPTIONS = [
+    {
+        "value": "default_male",
+        "label": "預設男聲，台灣口音，自然語速",
+        "prompt": "闽南话，台湾口音，语气自然，语速正常，保持参考音频的男声音色和说话方式",
+    },
+    {
+        "value": "warm_male",
+        "label": "溫和男聲，像廣播旁白",
+        "prompt": "闽南话，台湾口音，成年男性，声音温和自然，语速正常，像广播旁白",
+    },
+    {
+        "value": "low_male",
+        "label": "低沉男聲，穩定親切，稍慢",
+        "prompt": "闽南话，台湾口音，成年男性，声音低沉稳定，语气亲切，语速稍慢",
+    },
+    {
+        "value": "clear_female",
+        "label": "清楚女聲，柔和自然",
+        "prompt": "闽南话，台湾口音，成年女性，声音清楚柔和，语气自然，语速正常",
+    },
+    {
+        "value": "bright_young_male",
+        "label": "年輕男聲，明亮有精神",
+        "prompt": "闽南话，台湾口音，年轻男性，声音明亮，有精神，语速正常",
+    },
+    {
+        "value": "friendly_young_female",
+        "label": "年輕女聲，輕鬆親切",
+        "prompt": "闽南话，台湾口音，年轻女性，声音轻松自然，语气亲切，语速正常",
+    },
+]
+
+
+def resolve_voice_control(control: str) -> str:
+    for option in VOICE_CONTROL_OPTIONS:
+        if control == option["value"]:
+            return option["prompt"]
+    return control
 
 
 class JobStore:
@@ -145,6 +309,7 @@ class JobStore:
         return JOB_ROOT / job_id / "job.json"
 
     def _persist(self, job: Job):
+        db_save_job(job)
         path = self._job_path(job.id)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(job.model_dump_json(indent=2), encoding="utf-8")
@@ -152,9 +317,22 @@ class JobStore:
     def load(self):
         with self._lock:
             self._jobs.clear()
+            for job in db_load_jobs():
+                if job.status in {"queued", "running"}:
+                    job = job.model_copy(update={
+                        "status": "failed",
+                        "stage": "Interrupted",
+                        "progress": 100,
+                        "error": "Server stopped before this job finished.",
+                        "updated_at": time.time(),
+                    })
+                    self._persist(job)
+                self._jobs[job.id] = job
             for job_path in JOB_ROOT.glob("*/job.json"):
                 try:
                     job = Job.model_validate_json(job_path.read_text(encoding="utf-8"))
+                    if job.id in self._jobs:
+                        continue
                     if job.status in {"queued", "running"}:
                         job = job.model_copy(update={
                             "status": "failed",
@@ -163,7 +341,7 @@ class JobStore:
                             "error": "Server stopped before this job finished.",
                             "updated_at": time.time(),
                         })
-                        self._persist(job)
+                    self._persist(job)
                     self._jobs[job.id] = job
                 except Exception:
                     continue
@@ -202,7 +380,142 @@ class JobStore:
             if job.status == "running":
                 raise HTTPException(status_code=409, detail="Running jobs cannot be deleted")
             del self._jobs[job_id]
+            db_delete_job(job_id)
         shutil.rmtree(JOB_ROOT / job_id, ignore_errors=True)
+
+
+def db_connect() -> sqlite3.Connection:
+    SQLITE_DB.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(SQLITE_DB)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at REAL NOT NULL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at REAL NOT NULL)")
+    conn.commit()
+    return conn
+
+
+def db_get_json(key: str, default):
+    with db_lock, db_connect() as conn:
+        row = conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+        if not row:
+            return default
+        try:
+            return json.loads(row["value"])
+        except Exception:
+            return default
+
+
+def db_set_json(key: str, value):
+    with db_lock, db_connect() as conn:
+        conn.execute(
+            "INSERT INTO kv(key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (key, json.dumps(value, ensure_ascii=False), time.time()),
+        )
+        conn.commit()
+
+
+def db_load_jobs() -> list[Job]:
+    with db_lock, db_connect() as conn:
+        rows = conn.execute("SELECT value FROM jobs").fetchall()
+    jobs = []
+    for row in rows:
+        try:
+            jobs.append(Job.model_validate_json(row["value"]))
+        except Exception:
+            continue
+    return jobs
+
+
+def db_save_job(job: Job):
+    with db_lock, db_connect() as conn:
+        conn.execute(
+            "INSERT INTO jobs(id, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (job.id, job.model_dump_json(), time.time()),
+        )
+        conn.commit()
+
+
+def db_delete_job(job_id: str):
+    with db_lock, db_connect() as conn:
+        conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        conn.commit()
+
+
+def postgres_schema_name(schema_name: str) -> str:
+    schema_name = (schema_name or "public").strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,62}", schema_name):
+        raise HTTPException(status_code=400, detail={"message": "PostgreSQL schema 名稱只能使用英文字母、數字和底線，且不能以數字開頭。"})
+    return schema_name
+
+
+def sqlite_export_rows() -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:
+    with db_lock, db_connect() as conn:
+        kv_rows = conn.execute("SELECT key, value, updated_at FROM kv ORDER BY key").fetchall()
+        job_rows = conn.execute("SELECT id, value, updated_at FROM jobs ORDER BY id").fetchall()
+    return kv_rows, job_rows
+
+
+def export_sqlite_to_postgres(settings: AppSettings) -> PostgresExportResult:
+    if psycopg is None or sql is None or Jsonb is None:
+        raise HTTPException(status_code=500, detail={"message": "PostgreSQL driver 尚未安裝，請安裝 psycopg[binary]。"})
+    dsn = settings.postgres_dsn.strip()
+    if not dsn:
+        raise HTTPException(status_code=400, detail={"message": "尚未設定 PostgreSQL DSN。"})
+    schema_name = postgres_schema_name(settings.postgres_schema)
+    kv_rows, job_rows = sqlite_export_rows()
+    try:
+        with psycopg.connect(dsn, connect_timeout=10) as pg_conn:
+            with pg_conn.cursor() as cur:
+                schema_ident = sql.Identifier(schema_name)
+                cur.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(schema_ident))
+                cur.execute(sql.SQL("""
+                    CREATE TABLE IF NOT EXISTS {}.taigi_kv (
+                        key TEXT PRIMARY KEY,
+                        value JSONB NOT NULL,
+                        updated_at DOUBLE PRECISION NOT NULL
+                    )
+                """).format(schema_ident))
+                cur.execute(sql.SQL("""
+                    CREATE TABLE IF NOT EXISTS {}.taigi_jobs (
+                        id TEXT PRIMARY KEY,
+                        value JSONB NOT NULL,
+                        updated_at DOUBLE PRECISION NOT NULL
+                    )
+                """).format(schema_ident))
+                kv_insert = sql.SQL("""
+                    INSERT INTO {}.taigi_kv(key, value, updated_at)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value = EXCLUDED.value,
+                        updated_at = EXCLUDED.updated_at
+                """).format(schema_ident)
+                job_insert = sql.SQL("""
+                    INSERT INTO {}.taigi_jobs(id, value, updated_at)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT(id) DO UPDATE SET
+                        value = EXCLUDED.value,
+                        updated_at = EXCLUDED.updated_at
+                """).format(schema_ident)
+                for row in kv_rows:
+                    cur.execute(kv_insert, (row["key"], Jsonb(json.loads(row["value"])), row["updated_at"]))
+                for row in job_rows:
+                    cur.execute(job_insert, (row["id"], Jsonb(json.loads(row["value"])), row["updated_at"]))
+            pg_conn.commit()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail={"message": f"無法匯出到 PostgreSQL：{exc}"}) from exc
+    result = PostgresExportResult(
+        exported=True,
+        schema_name=schema_name,
+        kv_rows=len(kv_rows),
+        job_rows=len(job_rows),
+        exported_at=time.time(),
+    )
+    db_set_json("postgres_last_export", result.model_dump())
+    return result
 
 
 app_data = {"jobs": JobStore()}
@@ -215,28 +528,297 @@ def next_job_counter() -> int:
         return job_counter
 
 
-def enqueue_job(priority: int, job_id: str, payload: CreateJobRequest):
+def enqueue_job(priority: int, job_id: str, payload: Optional[CreateJobRequest] = None):
     job_queue.put((priority, next_job_counter(), job_id, payload))
+
+
+def word_job_position(word_id: str) -> int:
+    with job_queue.mutex:
+        queued_items = sorted(list(job_queue.queue), key=lambda item: (item[0], item[1]))
+    position = 0
+    for _, _, queued_job_id, _ in queued_items:
+        job = app_data["jobs"].get(queued_job_id)
+        if job and job.kind == "word_asset":
+            position += 1
+            if job.metadata.get("word_id") == word_id:
+                return position
+    return 0
+
+
+def word_generation_status(word: dict) -> dict:
+    status = word.get("generation_status") or ("complete" if word.get("has_audio") and word.get("has_video") else "idle")
+    position = word_job_position(word.get("id", "")) if status == "queued" else 0
+    return {
+        "generation_status": status,
+        "generation_stage": word.get("generation_stage", ""),
+        "generation_progress": int(word.get("generation_progress") or (100 if status == "complete" else 0)),
+        "generation_error": word.get("generation_error", ""),
+        "generation_position": position,
+        "generation_job_id": word.get("generation_job_id", ""),
+        "generation_updated_at": word.get("generation_updated_at"),
+    }
+
+
+def mark_word_generation(word_id: str, **patch):
+    db = load_word_db()
+    word = db.get("words", {}).get(word_id)
+    if not word:
+        return
+    word.update(patch)
+    word["generation_updated_at"] = time.time()
+    word["updated_at"] = time.time()
+    db["words"][word_id] = word
+    save_word_db(db)
+
+
+def word_has_generated_asset(word: dict) -> bool:
+    if word.get("has_audio") and word.get("has_video"):
+        return True
+    for asset in word.get("assets") or []:
+        if asset.get("has_audio") and asset.get("has_video"):
+            return True
+    return False
+
+
+def word_has_active_generation(word_id: str) -> bool:
+    for job in app_data["jobs"].list():
+        if job.kind != "word_asset" or job.metadata.get("word_id") != word_id:
+            continue
+        if job.status in {"queued", "running"}:
+            return True
+    return False
+
+
+def enqueue_word_generation_job(
+    word_id: str,
+    requester_id: str = "",
+    requester_name: str = "",
+    *,
+    auto: bool = False,
+    priority: int = 5,
+) -> tuple[dict, Optional[Job]]:
+    db = load_word_db()
+    word = db.get("words", {}).get(word_id)
+    if not word:
+        raise HTTPException(status_code=404, detail={"message": "找不到這個詞語。"})
+    if word.get("generation_status") in {"queued", "running"} or word_has_active_generation(word_id):
+        active_job_id = word.get("generation_job_id", "")
+        active_job = app_data["jobs"].get(active_job_id) if active_job_id else None
+        return {**word, **word_generation_status(word)}, active_job
+    now = time.time()
+    job_id = uuid.uuid4().hex
+    requester_name = requester_name or reviewer_display_name(requester_id) or "匿名使用者"
+    word.update({
+        "generation_status": "queued",
+        "generation_stage": "已排入主工作佇列",
+        "generation_progress": 5,
+        "generation_error": "",
+        "generation_job_id": job_id,
+        "generation_requester_id": requester_id,
+        "generation_requester_name": requester_name,
+        "generation_auto": auto,
+        "generation_updated_at": now,
+        "updated_at": now,
+    })
+    db["words"][word_id] = word
+    save_word_db(db)
+    job = Job(
+        id=job_id,
+        kind="word_asset",
+        owner_id=requester_id or None,
+        title=f"詞語語音：{word.get('source') or word.get('taigi') or word_id}",
+        status="queued",
+        stage="Queued",
+        progress=0,
+        created_at=now,
+        updated_at=now,
+        chinese_text=word.get("source", ""),
+        taigi_text=word.get("taigi", ""),
+        tailo_text=word.get("tailo", ""),
+        segment_count=1,
+        metadata={
+            "word_id": word_id,
+            "source": word.get("source", ""),
+            "taigi": word.get("taigi", ""),
+            "tailo": word.get("tailo", ""),
+            "requester_id": requester_id,
+            "requester_name": requester_name,
+            "auto": auto,
+        },
+    )
+    app_data["jobs"].add(job)
+    record_stat_action("create_word_asset_job", "word", word_id, {"job_id": job_id, "auto": auto})
+    enqueue_job(priority, job_id, None)
+    return {**word, **word_generation_status(word)}, job
+
+
+def reset_interrupted_word_generations():
+    db = load_word_db()
+    changed = False
+    now = time.time()
+    for word in db.get("words", {}).values():
+        if word.get("generation_status") in {"queued", "running"}:
+            word.update({
+                "generation_status": "failed",
+                "generation_stage": "服務重啟前詞語生成尚未完成",
+                "generation_progress": 100,
+                "generation_error": "Server stopped before this word generation finished.",
+                "generation_updated_at": now,
+                "updated_at": now,
+            })
+            changed = True
+    if changed:
+        save_word_db(db)
+
+
+def schedule_one_missing_word_asset() -> Optional[Job]:
+    db = load_word_db()
+    candidates = [
+        word
+        for word in db.get("words", {}).values()
+        if not word_has_generated_asset(word)
+        and word.get("generation_status") not in {"queued", "running"}
+        and not word_has_active_generation(word.get("id", ""))
+    ]
+    if not candidates:
+        return None
+    word = random.choice(candidates)
+    _, job = enqueue_word_generation_job(
+        word["id"],
+        requester_id="system:auto-word-asset",
+        requester_name="系統自動排程",
+        auto=True,
+        priority=20,
+    )
+    return job
+
+
+def word_auto_scheduler():
+    while True:
+        time.sleep(max(60, WORD_AUTO_GENERATE_INTERVAL_SECONDS))
+        try:
+            schedule_one_missing_word_asset()
+        except Exception as exc:
+            print(f"Failed to auto-schedule word asset generation: {exc}", flush=True)
+
+
+def run_word_asset_job(job_id: str):
+    jobs: JobStore = app_data["jobs"]
+    job = jobs.get(job_id)
+    if not job:
+        return
+    started_at = time.time()
+    word_id = str(job.metadata.get("word_id") or "")
+    if not word_id:
+        jobs.update(job_id, status="failed", stage="Failed", progress=100, error="Missing word_id metadata.")
+        return
+    mark_word_generation(
+        word_id,
+        generation_status="running",
+        generation_stage="正在產生詞語語音",
+        generation_progress=30,
+        generation_error="",
+    )
+    jobs.update(job_id, status="running", stage="Generating word audio", progress=20, started_at=started_at)
+    db = load_word_db()
+    word = db.get("words", {}).get(word_id)
+    if not word:
+        jobs.update(job_id, status="failed", stage="Failed", progress=100, error="Word not found.")
+        return
+    try:
+        settings = load_settings()
+        requester_id = word.get("generation_requester_id", "")
+        requester_name = word.get("generation_requester_name", "") or reviewer_display_name(requester_id)
+        jobs.update(job_id, stage="Synthesizing word audio", progress=45)
+        generated, asset = generate_word_asset_variant(
+            word,
+            voice_mode=settings.default_reference_voice_mode,
+            voice_control=resolve_voice_control("default_male"),
+            device=DEFAULT_DEVICE,
+            timesteps=8,
+            cfg_value=2.5,
+            generated_by_id=requester_id,
+            generated_by_name=requester_name,
+        )
+        jobs.update(job_id, stage="Rendering word video", progress=80)
+        generated.update({
+            "generation_status": "complete",
+            "generation_stage": "詞語語音與影片已完成",
+            "generation_progress": 100,
+            "generation_error": "",
+            "generation_job_id": job_id,
+            "generation_updated_at": time.time(),
+            "updated_at": time.time(),
+        })
+        db = load_word_db()
+        db.setdefault("words", {})[word_id] = generated
+        save_word_db(db)
+        completed_at = time.time()
+        jobs.update(
+            job_id,
+            status="complete",
+            stage="Complete",
+            progress=100,
+            completed_at=completed_at,
+            elapsed_seconds=round(completed_at - started_at, 3),
+            output_dir=str(WORD_ASSET_DIR / word_id / "assets" / asset["id"]),
+            audio_path=asset.get("audio_path"),
+            video_path=asset.get("video_path"),
+            taigi_text=generated.get("taigi", ""),
+            tailo_text=generated.get("tailo", ""),
+            metadata={**job.metadata, "asset_id": asset.get("id")},
+        )
+    except Exception as exc:
+        completed_at = time.time()
+        mark_word_generation(
+            word_id,
+            generation_status="failed",
+            generation_stage="詞語語音生成失敗",
+            generation_progress=100,
+            generation_error=str(exc),
+        )
+        jobs.update(
+            job_id,
+            status="failed",
+            stage="Failed",
+            progress=100,
+            error=str(exc),
+            completed_at=completed_at,
+            elapsed_seconds=round(completed_at - started_at, 3),
+        )
 
 
 def job_worker():
     while True:
         _, _, job_id, payload = job_queue.get()
         try:
-            run_job(job_id, payload)
+            job = app_data["jobs"].get(job_id)
+            if job and job.kind == "word_asset":
+                run_word_asset_job(job_id)
+            elif payload:
+                run_job(job_id, payload)
         finally:
             job_queue.task_done()
 
 
 worker_thread = Thread(target=job_worker, daemon=True)
+word_auto_scheduler_thread = Thread(target=word_auto_scheduler, daemon=True)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     JOB_ROOT.mkdir(parents=True, exist_ok=True)
     app_data["jobs"].load()
+    load_auth_store()
+    load_settings()
+    load_stats()
+    load_translation_memory()
+    load_word_db()
+    reset_interrupted_word_generations()
     if not worker_thread.is_alive():
         worker_thread.start()
+    if not word_auto_scheduler_thread.is_alive():
+        word_auto_scheduler_thread.start()
     yield
 
 
@@ -256,33 +838,61 @@ def hash_secret(value: str) -> str:
 
 def load_auth_store() -> dict:
     with auth_lock:
+        stored = db_get_json("auth_store", None)
+        if stored is not None:
+            stored.setdefault("magic_tokens", {})
+            stored.setdefault("sessions", {})
+            stored.setdefault("users", {})
+            stored.setdefault("anonymous_users", {})
+            return stored
         if not AUTH_STORE.exists():
-            return {"magic_tokens": {}, "sessions": {}}
+            payload = {"magic_tokens": {}, "sessions": {}, "users": {}, "anonymous_users": {}}
+            db_set_json("auth_store", payload)
+            return payload
         try:
             payload = json.loads(AUTH_STORE.read_text(encoding="utf-8"))
         except Exception:
-            return {"magic_tokens": {}, "sessions": {}}
+            payload = {"magic_tokens": {}, "sessions": {}, "users": {}, "anonymous_users": {}}
+            db_set_json("auth_store", payload)
+            return payload
         payload.setdefault("magic_tokens", {})
         payload.setdefault("sessions", {})
+        payload.setdefault("users", {})
+        payload.setdefault("anonymous_users", {})
+        db_set_json("auth_store", payload)
         return payload
 
 
 def load_settings() -> AppSettings:
+    stored = db_get_json("settings", None)
+    if stored is not None:
+        try:
+            return AppSettings.model_validate(stored)
+        except Exception:
+            return AppSettings()
     if not SETTINGS_PATH.exists():
-        return AppSettings()
+        settings = AppSettings()
+        db_set_json("settings", settings.model_dump())
+        return settings
     try:
-        return AppSettings.model_validate_json(SETTINGS_PATH.read_text(encoding="utf-8"))
+        settings = AppSettings.model_validate_json(SETTINGS_PATH.read_text(encoding="utf-8"))
+        db_set_json("settings", settings.model_dump())
+        return settings
     except Exception:
-        return AppSettings()
+        settings = AppSettings()
+        db_set_json("settings", settings.model_dump())
+        return settings
 
 
 def save_settings(settings: AppSettings):
+    db_set_json("settings", settings.model_dump())
     SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     SETTINGS_PATH.write_text(settings.model_dump_json(indent=2), encoding="utf-8")
 
 
 def save_auth_store(payload: dict):
     with auth_lock:
+        db_set_json("auth_store", payload)
         AUTH_STORE.parent.mkdir(parents=True, exist_ok=True)
         AUTH_STORE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -313,10 +923,12 @@ def create_magic_token(email: str) -> str:
     return token
 
 
-def create_admin_session(email: str) -> str:
+def create_session(email: str) -> str:
     token = secrets.token_urlsafe(32)
     payload = load_auth_store()
     prune_auth_store(payload)
+    payload.setdefault("users", {}).setdefault(email, {"email": email, "created_at": time.time()})
+    payload["users"][email]["last_login_at"] = time.time()
     payload["sessions"][hash_secret(token)] = {
         "email": email,
         "expires_at": time.time() + SESSION_TTL_SECONDS,
@@ -334,7 +946,7 @@ def consume_magic_token(token: str) -> Optional[str]:
     if not entry:
         return None
     email = entry.get("email", "").strip().lower()
-    return email if email == ADMIN_EMAIL else None
+    return email
 
 
 def session_email(token: str) -> Optional[str]:
@@ -344,7 +956,7 @@ def session_email(token: str) -> Optional[str]:
     if not entry:
         return None
     email = entry.get("email", "").strip().lower()
-    return email if email == ADMIN_EMAIL else None
+    return email
 
 
 def revoke_session(token: Optional[str]):
@@ -353,6 +965,71 @@ def revoke_session(token: Optional[str]):
     payload = load_auth_store()
     payload.get("sessions", {}).pop(hash_secret(token.strip()), None)
     save_auth_store(payload)
+
+
+def anon_token_from_user_id(user_id: str) -> str:
+    return user_id.split(":", 1)[1] if user_id.startswith("anon:") else ""
+
+
+def default_anon_base_nickname(token: str) -> str:
+    digest = sha256(token.encode("utf-8")).hexdigest()
+    return ANON_TAIGI_NICKNAMES[int(digest[:8], 16) % len(ANON_TAIGI_NICKNAMES)]
+
+
+def anonymous_suffix(token: str) -> str:
+    return sha256(token.encode("utf-8")).hexdigest()[:4]
+
+
+def ensure_anonymous_profile(user_id: str) -> dict:
+    token = anon_token_from_user_id(user_id)
+    if not token:
+        return {}
+    payload = load_auth_store()
+    anonymous_users = payload.setdefault("anonymous_users", {})
+    now = time.time()
+    profile = anonymous_users.get(token)
+    if not profile:
+        base = default_anon_base_nickname(token)
+        profile = {
+            "id": token,
+            "nickname": base,
+            "display_name": f"{base}-{anonymous_suffix(token)}",
+            "created_at": now,
+            "updated_at": now,
+            "nickname_change_count": 0,
+            "nickname_history": [],
+        }
+        anonymous_users[token] = profile
+        save_auth_store(payload)
+    return profile
+
+
+def set_anonymous_nickname(user_id: str, nickname: str) -> dict:
+    token = anon_token_from_user_id(user_id)
+    if not token:
+        raise HTTPException(status_code=400, detail={"message": "只有匿名使用者可以設定匿名暱稱。"})
+    nickname = nickname.strip()
+    if nickname not in ANON_TAIGI_NICKNAMES:
+        raise HTTPException(status_code=400, detail={"message": "請從系統提供的台語匿名暱稱中選擇。"})
+    payload = load_auth_store()
+    anonymous_users = payload.setdefault("anonymous_users", {})
+    current = anonymous_users.get(token) or ensure_anonymous_profile(user_id)
+    now = time.time()
+    old_nickname = current.get("nickname") or default_anon_base_nickname(token)
+    if old_nickname != nickname:
+        current.setdefault("nickname_history", []).append({
+            "from": old_nickname,
+            "to": nickname,
+            "changed_at": now,
+        })
+        current["nickname_change_count"] = int(current.get("nickname_change_count") or 0) + 1
+    current["nickname"] = nickname
+    current["display_name"] = f"{nickname}-{anonymous_suffix(token)}"
+    current["updated_at"] = now
+    anonymous_users[token] = current
+    save_auth_store(payload)
+    record_stat_action("anonymous_nickname_change", "anonymous_user", token)
+    return current
 
 
 def smtp_value(*names: str) -> Optional[str]:
@@ -419,21 +1096,66 @@ def sentence_count(text: str) -> int:
     return max(1, len(parts)) if text.strip() else 0
 
 
-def enforce_public_rate_limit(request: Request, text: str):
-    if is_private_client(request):
-        return
+def public_rate_limit_state(request: Request) -> dict:
     limit_seconds = max(60, int(load_settings().public_rate_limit_seconds))
-    if sentence_count(text) > 1:
-        raise HTTPException(status_code=429, detail="Public users can submit only one sentence per job.")
     ip = client_ip(request) or "unknown"
     now = time.time()
     with rate_limit_lock:
         last = rate_limit_seen.get(ip, 0)
-        remaining = limit_seconds - (now - last)
+    remaining = max(0, limit_seconds - (now - last))
+    return {
+        "limit_seconds": limit_seconds,
+        "wait_seconds": int(remaining),
+        "can_submit": remaining <= 0,
+        "next_available_at": last + limit_seconds if remaining > 0 else now,
+        "sentence_limit": 1,
+    }
+
+
+def queue_status() -> dict:
+    jobs = app_data["jobs"].list()
+    running_count = sum(1 for job in jobs if job.status == "running")
+    with job_queue.mutex:
+        queued_count = len(job_queue.queue)
+    return {
+        "running_count": running_count,
+        "queued_count": queued_count,
+        "next_position": running_count + queued_count + 1,
+    }
+
+
+def enforce_public_rate_limit(request: Request, text: str):
+    if is_private_client(request):
+        return
+    rate_state = public_rate_limit_state(request)
+    if sentence_count(text) > 1:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "message": "未登入使用者每次只能送出一句。",
+                "rate_limit": rate_state,
+                "queue": queue_status(),
+            },
+        )
+    ip = client_ip(request) or "unknown"
+    now = time.time()
+    with rate_limit_lock:
+        last = rate_limit_seen.get(ip, 0)
+        remaining = rate_state["limit_seconds"] - (now - last)
         if remaining > 0:
+            retry_state = {
+                **rate_state,
+                "wait_seconds": int(remaining),
+                "can_submit": False,
+                "next_available_at": last + rate_state["limit_seconds"],
+            }
             raise HTTPException(
                 status_code=429,
-                detail=f"Public rate limit: submit one sentence every {limit_seconds // 60} minutes. Try again in {int(remaining)} seconds.",
+                detail={
+                    "message": "未登入使用者需要等待後才能再次生成語音。",
+                    "rate_limit": retry_state,
+                    "queue": queue_status(),
+                },
             )
         rate_limit_seen[ip] = now
 
@@ -469,6 +1191,15 @@ def is_authorized(
     return not PUBLIC_ACCESS and is_loopback(request)
 
 
+def authenticated_email(request: Request) -> Optional[str]:
+    session = request.cookies.get(ADMIN_SESSION_COOKIE)
+    return session_email(session) if session else None
+
+
+def is_authenticated(request: Request) -> bool:
+    return bool(authenticated_email(request))
+
+
 def require_auth(
     request: Request,
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
@@ -479,7 +1210,247 @@ def require_auth(
 
 
 def job_is_public(job: Job) -> bool:
-    return job.status == "complete"
+    return job.status == "complete" or job.kind == "word_asset"
+
+
+def job_is_owned_by_request(job: Job, request: Request) -> bool:
+    email = authenticated_email(request)
+    if email and job.owner_id == f"user:{email}":
+        return True
+    existing = request.cookies.get(REVIEWER_COOKIE)
+    return bool(existing and job.owner_id == f"anon:{existing}")
+
+
+def reviews_path_for_job(job: Job) -> Path:
+    output_dir = Path(job.output_dir or JOB_ROOT / job.id / "output")
+    return output_dir / "reviews.json"
+
+
+def load_reviews(job: Job) -> list[dict]:
+    reviews_path = reviews_path_for_job(job)
+    if not reviews_path.exists():
+        return []
+    try:
+        return json.loads(reviews_path.read_text(encoding="utf-8")).get("reviews", [])
+    except Exception:
+        return []
+
+
+def save_reviews(job: Job, reviews: list[dict]):
+    reviews_path = reviews_path_for_job(job)
+    reviews_path.parent.mkdir(parents=True, exist_ok=True)
+    reviews_path.write_text(json.dumps({"reviews": reviews}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_stats() -> dict:
+    with stats_lock:
+        stored = db_get_json("stats", None)
+        if stored is not None:
+            stored.setdefault("jobs", {})
+            stored.setdefault("words", {})
+            stored.setdefault("actions", {})
+            stored.setdefault("daily", {})
+            stored.setdefault("total_plays", 0)
+            stored.setdefault("audio_plays", 0)
+            stored.setdefault("video_plays", 0)
+            return stored
+        if not STATS_PATH.exists():
+            payload = {
+                "total_plays": 0,
+                "audio_plays": 0,
+                "video_plays": 0,
+                "jobs": {},
+                "words": {},
+                "actions": {},
+                "daily": {},
+                "updated_at": 0,
+            }
+            db_set_json("stats", payload)
+            return payload
+        try:
+            payload = json.loads(STATS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {
+                "total_plays": 0,
+                "audio_plays": 0,
+                "video_plays": 0,
+                "jobs": {},
+                "words": {},
+                "actions": {},
+                "daily": {},
+                "updated_at": 0,
+            }
+            db_set_json("stats", payload)
+            return payload
+        payload.setdefault("jobs", {})
+        payload.setdefault("words", {})
+        payload.setdefault("actions", {})
+        payload.setdefault("daily", {})
+        payload.setdefault("total_plays", 0)
+        payload.setdefault("audio_plays", 0)
+        payload.setdefault("video_plays", 0)
+        db_set_json("stats", payload)
+        return payload
+
+
+def save_stats(payload: dict):
+    with stats_lock:
+        STATS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload["updated_at"] = time.time()
+        db_set_json("stats", payload)
+        STATS_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def stats_day_key(ts: Optional[float] = None) -> str:
+    return time.strftime("%Y-%m-%d", time.localtime(ts or time.time()))
+
+
+def record_stat_action(action: str, target_type: str = "", target_id: str = "", amount: int = 1, metadata: Optional[dict] = None):
+    action = re.sub(r"[^a-z0-9_.:-]+", "_", action.strip().lower())[:64]
+    if not action:
+        return
+    stats = load_stats()
+    amount = max(1, int(amount))
+    stats.setdefault("actions", {})[action] = int(stats.setdefault("actions", {}).get(action) or 0) + amount
+    day = stats.setdefault("daily", {}).setdefault(stats_day_key(), {"actions": {}, "targets": {}, "total": 0})
+    day["total"] = int(day.get("total") or 0) + amount
+    day.setdefault("actions", {})[action] = int(day.setdefault("actions", {}).get(action) or 0) + amount
+    if target_type and target_id:
+        target_key = f"{target_type}:{target_id}"
+        target = day.setdefault("targets", {}).setdefault(target_key, {"count": 0, "actions": {}})
+        target["count"] = int(target.get("count") or 0) + amount
+        target.setdefault("actions", {})[action] = int(target.setdefault("actions", {}).get(action) or 0) + amount
+    stats["last_action"] = {
+        "action": action,
+        "target_type": target_type,
+        "target_id": target_id,
+        "metadata": metadata or {},
+        "created_at": time.time(),
+    }
+    save_stats(stats)
+
+
+def increment_play(kind: Literal["audio", "video"], target_type: Literal["job", "segment", "word"], target_id: str, job_id: str = ""):
+    stats = load_stats()
+    stats["total_plays"] = int(stats.get("total_plays") or 0) + 1
+    key = "audio_plays" if kind == "audio" else "video_plays"
+    stats[key] = int(stats.get(key) or 0) + 1
+    group_key = "words" if target_type == "word" else "jobs"
+    group_id = target_id if target_type == "word" else (job_id or target_id)
+    group = stats.setdefault(group_key, {}).setdefault(group_id, {"audio_plays": 0, "video_plays": 0, "plays": 0})
+    group["plays"] = int(group.get("plays") or 0) + 1
+    group[key] = int(group.get(key) or 0) + 1
+    group["updated_at"] = time.time()
+    if target_type == "segment":
+        segment = group.setdefault("segments", {}).setdefault(target_id, {"audio_plays": 0, "plays": 0})
+        segment["plays"] = int(segment.get("plays") or 0) + 1
+        segment["audio_plays"] = int(segment.get("audio_plays") or 0) + 1
+        segment["updated_at"] = time.time()
+    if target_type == "word" and job_id:
+        asset = group.setdefault("assets", {}).setdefault(job_id, {"audio_plays": 0, "video_plays": 0, "plays": 0})
+        asset["plays"] = int(asset.get("plays") or 0) + 1
+        asset[key] = int(asset.get(key) or 0) + 1
+        asset["updated_at"] = time.time()
+    save_stats(stats)
+    record_stat_action(f"play_{kind}", target_type, f"{target_id}:{job_id}" if target_type == "word" and job_id else target_id if target_type != "segment" else f"{job_id}:{target_id}")
+
+
+def job_play_summary(job_id: str) -> dict:
+    group = load_stats().get("jobs", {}).get(job_id, {})
+    return {
+        "play_count": int(group.get("plays") or 0),
+        "audio_play_count": int(group.get("audio_plays") or 0),
+        "video_play_count": int(group.get("video_plays") or 0),
+    }
+
+
+def review_user_id(request: Request, response: Optional[Response] = None) -> str:
+    email = authenticated_email(request)
+    if email:
+        return f"admin:{email}" if email == ADMIN_EMAIL else f"user:{email}"
+    existing = request.cookies.get(REVIEWER_COOKIE)
+    if existing and re.fullmatch(r"[a-f0-9]{32}", existing):
+        user_id = f"anon:{existing}"
+        ensure_anonymous_profile(user_id)
+        return user_id
+    reviewer_id = secrets.token_hex(16)
+    if response is not None:
+        response.set_cookie(
+            REVIEWER_COOKIE,
+            reviewer_id,
+            max_age=SESSION_TTL_SECONDS,
+            httponly=True,
+            secure=request.headers.get("x-forwarded-proto", request.url.scheme) == "https",
+            samesite="lax",
+        )
+    user_id = f"anon:{reviewer_id}"
+    ensure_anonymous_profile(user_id)
+    return user_id
+
+
+def reviewer_display_name(user_id: str) -> str:
+    if user_id.startswith("admin:"):
+        return "管理員"
+    if user_id.startswith("user:"):
+        return user_id.split(":", 1)[1]
+    token = user_id.split(":", 1)[1] if ":" in user_id else user_id
+    profile = ensure_anonymous_profile(f"anon:{token}")
+    return profile.get("display_name") or f"{default_anon_base_nickname(token)}-{anonymous_suffix(token)}"
+
+
+def segment_review_stats(reviews: list[dict], segment_index: int, user_id: Optional[str] = None) -> dict:
+    segment_reviews = [review for review in reviews if review.get("segment_index") == segment_index]
+    ratings = [int(review.get("rating") or 0) for review in segment_reviews if int(review.get("rating") or 0) > 0]
+    average = round(sum(ratings) / len(ratings), 2) if ratings else None
+    my_review = next((review for review in segment_reviews if user_id and review.get("user_id") == user_id), None)
+    return {
+        "average_rating": average,
+        "rating_count": len(ratings),
+        "my_rating": my_review.get("rating") if my_review else None,
+        "my_note": my_review.get("note", "") if my_review else "",
+    }
+
+
+def job_rating_summary(job: Job, user_id: str = "") -> dict:
+    reviews = load_reviews(job)
+    job_reviews = [
+        review for review in reviews
+        if review.get("target") == "job" or review.get("segment_index") == 0
+    ]
+    rating_source = job_reviews or reviews
+    ratings = [int(review.get("rating") or 0) for review in rating_source if int(review.get("rating") or 0) > 0]
+    my_review = next((review for review in job_reviews if user_id and review.get("user_id") == user_id), None)
+    return {
+        "rating_average": round(sum(ratings) / len(ratings), 2) if ratings else None,
+        "rating_count": len(ratings),
+        "my_rating": my_review.get("rating") if my_review else None,
+        "my_note": my_review.get("note", "") if my_review else "",
+    }
+
+
+def job_sort_score(job: Job) -> tuple:
+    rating = job_rating_summary(job)["rating_average"] or 0
+    plays = job_play_summary(job.id)["play_count"]
+    return (rating, plays, job.updated_at)
+
+
+def present_job(job: Job, admin: bool, user_id: str = ""):
+    if admin:
+        payload = job.model_dump()
+    else:
+        payload = job.model_dump()
+        for key in ("owner_id", "output_dir", "audio_path", "zip_path", "onedrive_dir"):
+            payload.pop(key, None)
+        payload["video_path"] = "available" if job.video_path else None
+        if isinstance(payload.get("metadata"), dict):
+            payload["metadata"] = {
+                key: value
+                for key, value in payload["metadata"].items()
+                if key not in {"requester_id"}
+            }
+    payload.update(job_rating_summary(job, user_id))
+    payload.update(job_play_summary(job.id))
+    return payload
 
 
 def require_job_access(
@@ -488,7 +1459,7 @@ def require_job_access(
     taigi_web_token_cookie: Optional[str] = None,
     authorization: Optional[str] = None,
 ):
-    if job_is_public(job) or is_authorized(request, taigi_web_token_cookie, authorization):
+    if job_is_public(job) or is_authorized(request, taigi_web_token_cookie, authorization) or job_is_owned_by_request(job, request):
         return
     raise HTTPException(status_code=401, detail="Private access required")
 
@@ -497,6 +1468,48 @@ def content_disposition(filename: str) -> str:
     encoded = quote(filename, safe="")
     ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "-", filename).strip(".-") or "download"
     return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded}'
+
+
+def file_inventory() -> dict:
+    job_audio_files = list(JOB_ROOT.glob("*/output/**/*.wav"))
+    job_video_files = list(JOB_ROOT.glob("*/output/**/*.mp4"))
+    word_audio_files = list(WORD_ASSET_DIR.glob("*/word.wav")) if WORD_ASSET_DIR.exists() else []
+    word_video_files = list(WORD_ASSET_DIR.glob("*/word.mp4")) if WORD_ASSET_DIR.exists() else []
+    return {
+        "audio_files": len(job_audio_files) + len(word_audio_files),
+        "video_files": len(job_video_files) + len(word_video_files),
+        "job_audio_files": len(job_audio_files),
+        "job_video_files": len(job_video_files),
+        "word_audio_files": len(word_audio_files),
+        "word_video_files": len(word_video_files),
+    }
+
+
+def public_stats() -> dict:
+    stats = load_stats()
+    jobs = app_data["jobs"].list()
+    word_db = load_word_db()
+    completed_jobs = [job for job in jobs if job.status == "complete"]
+    inventory = file_inventory()
+    return {
+        **inventory,
+        "total_plays": int(stats.get("total_plays") or 0),
+        "audio_plays": int(stats.get("audio_plays") or 0),
+        "video_plays": int(stats.get("video_plays") or 0),
+        "jobs_total": len(jobs),
+        "jobs_complete": len(completed_jobs),
+        "jobs_running": sum(1 for job in jobs if job.status == "running"),
+        "jobs_queued": sum(1 for job in jobs if job.status == "queued"),
+        "jobs_failed": sum(1 for job in jobs if job.status == "failed"),
+        "words_total": len(word_db.get("words", {})),
+        "word_queries_total": sum(int(item.get("count") or 0) for item in word_db.get("queries", {}).values()),
+        "actions": stats.get("actions", {}),
+        "daily": [
+            {"date": date, **day}
+            for date, day in sorted(stats.get("daily", {}).items())
+        ],
+        "updated_at": time.time(),
+    }
 
 
 def inline_text(value: str) -> str:
@@ -511,14 +1524,24 @@ def title_from_text(text: str, limit: int = 48) -> str:
 
 def load_translation_memory() -> dict:
     with memory_lock:
+        stored = db_get_json("translation_memory", None)
+        if stored is not None:
+            stored.setdefault("terms", {})
+            stored.setdefault("feedback", [])
+            return stored
         if not TRANSLATION_MEMORY.exists():
-            return {"terms": {}, "feedback": []}
+            payload = {"terms": {}, "feedback": []}
+            db_set_json("translation_memory", payload)
+            return payload
         try:
             payload = json.loads(TRANSLATION_MEMORY.read_text(encoding="utf-8"))
         except Exception:
-            return {"terms": {}, "feedback": []}
+            payload = {"terms": {}, "feedback": []}
+            db_set_json("translation_memory", payload)
+            return payload
         payload.setdefault("terms", {})
         payload.setdefault("feedback", [])
+        db_set_json("translation_memory", payload)
         return payload
 
 
@@ -526,11 +1549,14 @@ def save_translation_memory(payload: dict):
     with memory_lock:
         TRANSLATION_MEMORY.parent.mkdir(parents=True, exist_ok=True)
         payload["updated_at"] = time.time()
+        db_set_json("translation_memory", payload)
         TRANSLATION_MEMORY.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def remember_feedback(job_id: str, segment_index: int, feedback: SegmentFeedback):
     memory = load_translation_memory()
+    word_db = load_word_db()
+    word_db_changed = False
     terms = memory.setdefault("terms", {})
     now = time.time()
     for correction in feedback.corrections:
@@ -544,6 +1570,17 @@ def remember_feedback(job_id: str, segment_index: int, feedback: SegmentFeedback
             entry["tailo"] = correction.tailo_correction.strip()
         entry["count"] = int(entry.get("count", 0)) + 1
         entry["updated_at"] = now
+        if correction.taigi_correction.strip():
+            word_db_changed = upsert_lexicon_entry(
+                word_db,
+                source,
+                correction.taigi_correction.strip(),
+                correction.tailo_correction.strip(),
+                job_id=job_id,
+                category="修正詞句" if len(source) >= 4 else "修正詞語",
+                source_type="feedback_correction",
+                generate_assets_flag=False,
+            ) or word_db_changed
     memory.setdefault("feedback", []).append({
         "job_id": job_id,
         "segment_index": segment_index,
@@ -555,6 +1592,8 @@ def remember_feedback(job_id: str, segment_index: int, feedback: SegmentFeedback
         "created_at": now,
     })
     save_translation_memory(memory)
+    if word_db_changed:
+        save_word_db(word_db)
 
 
 def apply_translation_memory(text: str) -> str:
@@ -707,6 +1746,379 @@ def duration(path: Path) -> float:
 
 def run(cmd: list[str], cwd: Path = ROOT):
     subprocess.run(cmd, cwd=cwd, check=True)
+
+
+def safe_word_id(source: str, taigi: str) -> str:
+    digest = sha256(f"{source}\n{taigi}".encode("utf-8")).hexdigest()[:16]
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", source).strip("-").lower()[:32] or "word"
+    return f"{slug}-{digest}"
+
+
+def word_kind(source: str) -> str:
+    return "phrase" if len(source) >= 4 else "word"
+
+
+def seed_fixed_phrases(payload: dict) -> dict:
+    words = payload.setdefault("words", {})
+    changed = False
+    for seed in FIXED_PHRASE_SEEDS:
+        word_id = safe_word_id(seed["source"], seed["taigi"])
+        if word_id in words:
+            existing = words[word_id]
+            existing.setdefault("category", seed["category"])
+            existing.setdefault("kind", "phrase")
+            existing.setdefault("note", seed.get("note", ""))
+            continue
+        words[word_id] = {
+            "id": word_id,
+            "source": seed["source"],
+            "taigi": seed["taigi"],
+            "tailo": seed["tailo"],
+            "kind": "phrase",
+            "category": seed["category"],
+            "note": seed.get("note", ""),
+            "source_type": "seed",
+            "count": 0,
+            "jobs": [],
+            "updated_at": time.time(),
+        }
+        changed = True
+    if changed:
+        payload["updated_at"] = time.time()
+    return payload
+
+
+def load_word_db() -> dict:
+    with word_db_lock:
+        stored = db_get_json("word_db", None)
+        if stored is not None:
+            stored.setdefault("words", {})
+            stored.setdefault("queries", {})
+            return seed_fixed_phrases(stored)
+        if not WORD_DB.exists():
+            payload = seed_fixed_phrases({"words": {}, "queries": {}, "updated_at": 0})
+            db_set_json("word_db", payload)
+            return payload
+        try:
+            payload = json.loads(WORD_DB.read_text(encoding="utf-8"))
+        except Exception:
+            payload = seed_fixed_phrases({"words": {}, "queries": {}, "updated_at": 0})
+            db_set_json("word_db", payload)
+            return payload
+        payload.setdefault("words", {})
+        payload.setdefault("queries", {})
+        payload = seed_fixed_phrases(payload)
+        db_set_json("word_db", payload)
+        return payload
+
+
+def save_word_db(payload: dict):
+    with word_db_lock:
+        WORD_DB.parent.mkdir(parents=True, exist_ok=True)
+        payload["updated_at"] = time.time()
+        db_set_json("word_db", payload)
+        WORD_DB.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def remember_word_query(query: str):
+    query = query.strip()
+    if not query:
+        return
+    record_stat_action("word_query", "query", query)
+    db = load_word_db()
+    queries = db.setdefault("queries", {})
+    item = queries.get(query, {"query": query, "count": 0, "created_at": time.time()})
+    item["count"] = int(item.get("count") or 0) + 1
+    item["updated_at"] = time.time()
+    queries[query] = item
+    save_word_db(db)
+
+
+def upsert_lexicon_entry(db: dict, source: str, taigi_text: str, tailo_text: str, job_id: str = "", category: str = "", source_type: str = "generated", generate_assets_flag: bool = False, payload: Optional[CreateJobRequest] = None, voice_mode: str = "default", voice_control: str = "") -> bool:
+    source = source.strip()
+    taigi_text = taigi_text.strip()
+    if not source or not taigi_text:
+        return False
+    words = db.setdefault("words", {})
+    word_id = safe_word_id(source, taigi_text)
+    existing = words.get(word_id, {})
+    entry = {
+        **existing,
+        "id": word_id,
+        "source": source,
+        "taigi": taigi_text,
+        "tailo": tailo_text or tailo(taigi_text),
+        "kind": existing.get("kind") or word_kind(source),
+        "category": category or existing.get("category") or ("固定語句" if word_kind(source) == "phrase" else "詞語"),
+        "source_type": existing.get("source_type") or source_type,
+        "jobs": sorted(set(existing.get("jobs", []) + ([job_id] if job_id else []))),
+        "count": int(existing.get("count") or 0) + (1 if job_id else 0),
+        "updated_at": time.time(),
+    }
+    if generate_assets_flag and payload is not None:
+        try:
+            entry = generate_word_assets(
+                entry,
+                voice_mode=voice_mode,
+                voice_control=voice_control,
+                device=payload.device,
+                timesteps=payload.inference_timesteps,
+                cfg_value=payload.cfg_value,
+                force=bool(existing.get("problem")),
+            )
+        except Exception as exc:
+            entry["asset_error"] = str(exc)
+    words[word_id] = entry
+    return True
+
+
+def tokenize_chinese(text: str) -> list[str]:
+    cleaned = re.sub(r"\s+", "", text)
+    if not cleaned:
+        return []
+    memory_terms = sorted(
+        [term for term in load_translation_memory().get("terms", {}).keys() if len(term) > 1],
+        key=len,
+        reverse=True,
+    )
+    protected: list[str] = []
+    idx = 0
+    while idx < len(cleaned):
+        matched = next((term for term in memory_terms if cleaned.startswith(term, idx)), "")
+        if matched:
+            protected.append(matched)
+            idx += len(matched)
+            continue
+        end = idx + 1
+        while end < len(cleaned) and not any(cleaned.startswith(term, end) for term in memory_terms):
+            end += 1
+        chunk = cleaned[idx:end]
+        protected.extend(list(jieba.cut(chunk, cut_all=False)) if jieba else re.findall(r"[\u4e00-\u9fff]{1,4}|[A-Za-z0-9]+", chunk))
+        idx = end
+    raw_words = protected
+    words = []
+    for word in raw_words:
+        word = word.strip()
+        if not word or re.fullmatch(r"[，。！？、；：,.!?;:「」『』（）()]+", word):
+            continue
+        words.append(word)
+    return words
+
+
+def generate_word_video(word_dir: Path, title: str, audio_path: Path) -> Path:
+    return make_video(
+        word_dir,
+        title,
+        audio_path,
+        [{"index": 1, "start": 0.0, "end": max(0.2, duration(audio_path)), "text": title}],
+    )
+
+
+def generate_word_assets(word: dict, voice_mode: str, voice_control: str, device: str, timesteps: int, cfg_value: float, force: bool = False) -> dict:
+    word_dir = WORD_ASSET_DIR / word["id"]
+    word_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = word_dir / "word.wav"
+    video_path = word_dir / "word.mp4"
+    needs_regen = force or word.get("problem") or not audio_path.exists() or not video_path.exists()
+    if not needs_regen:
+        return {
+            **word,
+            "audio_path": str(audio_path),
+            "video_path": str(video_path),
+            "has_audio": True,
+            "has_video": True,
+        }
+
+    reference_audio: Optional[Path] = None
+    if voice_mode == "default":
+        reference_audio = DEFAULT_REFERENCE_AUDIO.expanduser()
+    cmd = [
+        VOXCPM_BIN, "clone" if reference_audio else "design",
+        "--text", word["taigi"],
+        "--control", voice_control,
+        "--output", str(audio_path),
+        "--device", device,
+        "--cache-dir", str(CACHE_DIR),
+        "--no-denoiser",
+        "--local-files-only",
+        "--inference-timesteps", str(max(4, min(timesteps, 10))),
+        "--cfg-value", str(cfg_value),
+    ]
+    if reference_audio and reference_audio.exists():
+        cmd.extend(["--reference-audio", str(reference_audio)])
+    run(cmd)
+    generated_video = generate_word_video(word_dir, word["taigi"], audio_path)
+    if generated_video != video_path:
+        shutil.move(generated_video, video_path)
+    return {
+        **word,
+        "audio_path": str(audio_path),
+        "video_path": str(video_path),
+        "has_audio": audio_path.exists(),
+        "has_video": video_path.exists(),
+        "problem": False,
+        "problem_reason": "",
+        "generated_at": time.time(),
+    }
+
+
+def word_asset_rating_summary(asset: dict, user_id: str = "") -> dict:
+    ratings = asset.get("ratings", {})
+    values = [int(item.get("rating") or 0) for item in ratings.values() if int(item.get("rating") or 0) > 0]
+    mine = ratings.get(user_id) if user_id else None
+    return {
+        "rating_average": round(sum(values) / len(values), 2) if values else None,
+        "rating_count": len(values),
+        "my_rating": mine.get("rating") if mine else None,
+        "my_note": mine.get("note", "") if mine else "",
+    }
+
+
+def public_word_assets(word: dict, user_id: str = "") -> list[dict]:
+    assets = list(word.get("assets") or [])
+    if not assets and word.get("audio_path"):
+        assets.append({
+            "id": "legacy",
+            "audio_path": word.get("audio_path"),
+            "video_path": word.get("video_path"),
+            "has_audio": bool(word.get("has_audio")),
+            "has_video": bool(word.get("has_video")),
+            "created_at": word.get("generated_at") or word.get("updated_at"),
+            "generated_by_id": "system:legacy",
+            "generated_by_name": "系統既有素材",
+            "ratings": {},
+        })
+    stats_words = load_stats().get("words", {})
+    asset_stats = stats_words.get(word.get("id", ""), {}).get("assets", {})
+    public_assets = []
+    for asset in assets:
+        asset_id = asset.get("id")
+        ratings = word_asset_rating_summary(asset, user_id)
+        public_assets.append({
+            "id": asset_id,
+            "has_audio": bool(asset.get("has_audio")),
+            "has_video": bool(asset.get("has_video")),
+            "created_at": asset.get("created_at"),
+            "generated_by_name": asset.get("generated_by_name", "匿名使用者"),
+            "generated_by_id": asset.get("generated_by_id", ""),
+            "play_count": int(asset_stats.get(asset_id, {}).get("plays") or 0),
+            "audio_play_count": int(asset_stats.get(asset_id, {}).get("audio_plays") or 0),
+            "video_play_count": int(asset_stats.get(asset_id, {}).get("video_plays") or 0),
+            **ratings,
+        })
+    public_assets.sort(
+        key=lambda item: (
+            float(item.get("rating_average") or 0),
+            int(item.get("play_count") or 0),
+            item.get("created_at") or 0,
+        ),
+        reverse=True,
+    )
+    return public_assets
+
+
+def generate_word_asset_variant(word: dict, voice_mode: str, voice_control: str, device: str, timesteps: int, cfg_value: float, generated_by_id: str, generated_by_name: str) -> tuple[dict, dict]:
+    asset_id = f"asset-{uuid.uuid4().hex[:12]}"
+    word_dir = WORD_ASSET_DIR / word["id"] / "assets" / asset_id
+    word_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = word_dir / "word.wav"
+    video_path = word_dir / "word.mp4"
+    reference_audio: Optional[Path] = None
+    if voice_mode == "default":
+        reference_audio = DEFAULT_REFERENCE_AUDIO.expanduser()
+    cmd = [
+        VOXCPM_BIN, "clone" if reference_audio else "design",
+        "--text", word["taigi"],
+        "--control", voice_control,
+        "--output", str(audio_path),
+        "--device", device,
+        "--cache-dir", str(CACHE_DIR),
+        "--no-denoiser",
+        "--local-files-only",
+        "--inference-timesteps", str(max(4, min(timesteps, 10))),
+        "--cfg-value", str(cfg_value),
+    ]
+    if reference_audio and reference_audio.exists():
+        cmd.extend(["--reference-audio", str(reference_audio)])
+    run(cmd)
+    generated_video = generate_word_video(word_dir, word["taigi"], audio_path)
+    if generated_video != video_path:
+        shutil.move(generated_video, video_path)
+    asset = {
+        "id": asset_id,
+        "audio_path": str(audio_path),
+        "video_path": str(video_path),
+        "has_audio": audio_path.exists(),
+        "has_video": video_path.exists(),
+        "created_at": time.time(),
+        "generated_by_id": generated_by_id,
+        "generated_by_name": generated_by_name,
+        "ratings": {},
+    }
+    updated = {
+        **word,
+        "audio_path": str(audio_path),
+        "video_path": str(video_path),
+        "has_audio": audio_path.exists(),
+        "has_video": video_path.exists(),
+        "problem": False,
+        "problem_reason": "",
+        "generated_at": asset["created_at"],
+        "assets": [asset] + list(word.get("assets") or []),
+    }
+    return updated, asset
+
+
+def word_rating_summary(word: dict, user_id: str = "") -> dict:
+    ratings = word.get("ratings", {})
+    values = [int(item.get("rating") or 0) for item in ratings.values() if int(item.get("rating") or 0) > 0]
+    mine = ratings.get(user_id) if user_id else None
+    return {
+        "rating_average": round(sum(values) / len(values), 2) if values else None,
+        "rating_count": len(values),
+        "my_rating": mine.get("rating") if mine else None,
+        "my_note": mine.get("note", "") if mine else "",
+    }
+
+
+def update_word_database_for_job(job_id: str, segment_records: list[dict], payload: CreateJobRequest, voice_mode: str, voice_control: str):
+    db = load_word_db()
+    changed = False
+    for segment in segment_records:
+        source_sentence = str(segment.get("source_text") or "").strip()
+        taigi_sentence = str(segment.get("taigi_text") or "").strip()
+        tailo_sentence = str(segment.get("tailo_text") or "").strip()
+        if len(source_sentence) >= 4:
+            changed = upsert_lexicon_entry(
+                db,
+                source_sentence,
+                taigi_sentence,
+                tailo_sentence,
+                job_id=job_id,
+                category="固定語句",
+                source_type="generated_sentence",
+                generate_assets_flag=False,
+            ) or changed
+        for source_word in tokenize_chinese(segment.get("source_text", "")):
+            taigi_word = translate_chinese_to_taigi(source_word)
+            if not taigi_word:
+                continue
+            tailo_word = tailo(taigi_word)
+            changed = upsert_lexicon_entry(
+                db,
+                source_word,
+                taigi_word,
+                tailo_word,
+                job_id=job_id,
+                category="詞語",
+                source_type="generated_word",
+                generate_assets_flag=True,
+                payload=payload,
+                voice_mode=voice_mode,
+                voice_control=voice_control,
+            ) or changed
+    if changed:
+        save_word_db(db)
 
 
 def make_background(path: Path, title: str):
@@ -879,7 +2291,7 @@ def run_job(job_id: str, payload: CreateJobRequest):
         jobs.update(job_id, segment_count=len(segment_records), stage=f"Generating {len(segment_records)} audio segments", progress=20)
 
         voice_mode = payload.reference_voice_mode or load_settings().default_reference_voice_mode
-        voice_control = payload.control
+        voice_control = resolve_voice_control(payload.control)
         reference_audio: Optional[Path] = None
         if voice_mode == "default":
             reference_audio = DEFAULT_REFERENCE_AUDIO.expanduser()
@@ -941,6 +2353,9 @@ def run_job(job_id: str, payload: CreateJobRequest):
             cursor += dur
         (output_dir / "subtitles.json").write_text(json.dumps({"duration": cursor, "segments": timeline}, ensure_ascii=False, indent=2), encoding="utf-8")
         (output_dir / "segments.json").write_text(json.dumps({"segments": segment_records}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        jobs.update(job_id, stage="Updating word database", progress=82)
+        update_word_database_for_job(job_id, segment_records, payload, voice_mode, voice_control)
 
         video_path = None
         if payload.make_video:
@@ -1016,8 +2431,8 @@ async def auth(token: Annotated[str, Form()]):
 @app.post("/auth/magic-link")
 async def request_magic_link(payload: MagicLinkRequest, request: Request):
     email = payload.email.strip().lower()
-    if email != ADMIN_EMAIL:
-        raise HTTPException(status_code=403, detail="Only the configured admin email can sign in.")
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise HTTPException(status_code=400, detail="Email 格式不正確。")
     enforce_login_rate_limit(request)
     token = create_magic_token(email)
     login_url = f"{PUBLIC_URL}/?{urlencode({'token': token})}"
@@ -1032,10 +2447,10 @@ async def request_magic_link(payload: MagicLinkRequest, request: Request):
 @app.post("/auth/verify")
 async def verify_magic_link(payload: VerifyMagicLinkRequest, request: Request):
     email = consume_magic_token(payload.token)
-    if email != ADMIN_EMAIL:
+    if not email:
         raise HTTPException(status_code=401, detail="Invalid or expired login link.")
-    session = create_admin_session(email)
-    response = JSONResponse({"authenticated": True, "email": email})
+    session = create_session(email)
+    response = JSONResponse({"authenticated": True, "is_admin": email == ADMIN_EMAIL, "email": email})
     response.set_cookie(
         ADMIN_SESSION_COOKIE,
         session,
@@ -1059,16 +2474,31 @@ async def logout(request: Request):
 @app.get("/auth/status")
 async def auth_status(
     request: Request,
+    response: Response,
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
     authorization: Annotated[Optional[str], Header()] = None,
 ):
+    email = authenticated_email(request)
+    is_admin = is_authorized(request, taigi_web_token_cookie, authorization)
+    anonymous_profile = None if email else ensure_anonymous_profile(review_user_id(request, response))
     return {
-        "authenticated": is_authorized(request, taigi_web_token_cookie, authorization),
+        "authenticated": bool(email) or is_admin,
+        "is_admin": is_admin,
+        "email": email,
+        "anonymous": anonymous_profile,
+        "anonymous_nickname_options": ANON_TAIGI_NICKNAMES,
         "token_required": True,
         "loopback_only": not PUBLIC_ACCESS and not bool(web_token()),
         "public_access": PUBLIC_ACCESS,
         "auth_method": "email_magic_link",
     }
+
+
+@app.put("/auth/anonymous-nickname")
+async def update_anonymous_nickname(payload: AnonymousNicknameRequest, request: Request, response: Response):
+    user_id = review_user_id(request, response)
+    profile = set_anonymous_nickname(user_id, payload.nickname)
+    return {"saved": True, "anonymous": profile, "anonymous_nickname_options": ANON_TAIGI_NICKNAMES}
 
 
 @app.get("/api/info")
@@ -1085,12 +2515,259 @@ async def api_info():
             {"value": "default", "label": "預設聲音"},
             {"value": "random", "label": "隨機生成"},
         ],
+        "voice_control_options": [
+            {"value": option["value"], "label": option["label"]}
+            for option in VOICE_CONTROL_OPTIONS
+        ],
+        "anonymous_nickname_options": [
+            {"value": nickname, "label": nickname}
+            for nickname in ANON_TAIGI_NICKNAMES
+        ],
         "pipeline": ["translate", "segment", "tts", "join", "subtitle", "video", "package"],
     }
     if not PUBLIC_ACCESS:
         info["job_dir"] = str(JOB_ROOT)
         info["translation_memory"] = str(TRANSLATION_MEMORY)
     return info
+
+
+@app.get("/api/status")
+async def api_status(
+    request: Request,
+    taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
+):
+    private_client = is_private_client(request)
+    admin_or_token = is_authorized(request, taigi_web_token_cookie, authorization)
+    rate_state = {
+        "limit_seconds": max(60, int(load_settings().public_rate_limit_seconds)),
+        "wait_seconds": 0,
+        "can_submit": True,
+        "next_available_at": time.time(),
+        "sentence_limit": 1,
+    } if admin_or_token or private_client or is_authenticated(request) else public_rate_limit_state(request)
+    return {
+        "authenticated": admin_or_token or is_authenticated(request),
+        "private_client": private_client,
+        "rate_limit": rate_state,
+        "queue": queue_status(),
+    }
+
+
+@app.get("/words")
+async def search_words(
+    request: Request,
+    q: str = "",
+    limit: int = 50,
+):
+    remember_word_query(q)
+    db = load_word_db()
+    query = q.strip().lower()
+    items = list(db.get("words", {}).values())
+    if query:
+        items = [
+            item for item in items
+            if query in str(item.get("source", "")).lower()
+            or query in str(item.get("taigi", "")).lower()
+            or query in str(item.get("tailo", "")).lower()
+            or query in str(item.get("category", "")).lower()
+            or query in str(item.get("note", "")).lower()
+        ]
+    stats_words = load_stats().get("words", {})
+    user_id = review_user_id(request)
+    items.sort(
+        key=lambda item: (
+            float(word_rating_summary(item).get("rating_average") or 0),
+            int(stats_words.get(item.get("id", ""), {}).get("plays") or 0),
+            int(item.get("count") or 0),
+            item.get("updated_at") or 0,
+        ),
+        reverse=True,
+    )
+    public_items = []
+    for item in items[: max(1, min(limit, 200))]:
+        ratings = word_rating_summary(item, user_id)
+        generation = word_generation_status(item)
+        public_items.append({
+            "id": item.get("id"),
+            "source": item.get("source"),
+            "taigi": item.get("taigi"),
+            "tailo": item.get("tailo"),
+            "kind": item.get("kind", "word"),
+            "category": item.get("category", "詞語"),
+            "note": item.get("note", ""),
+            "source_type": item.get("source_type", ""),
+            "count": item.get("count", 0),
+            "play_count": int(stats_words.get(item.get("id", ""), {}).get("plays") or 0),
+            "audio_play_count": int(stats_words.get(item.get("id", ""), {}).get("audio_plays") or 0),
+            "video_play_count": int(stats_words.get(item.get("id", ""), {}).get("video_plays") or 0),
+            **ratings,
+            "problem": bool(item.get("problem")),
+            "problem_reason": item.get("problem_reason", ""),
+            "has_audio": bool(item.get("has_audio")),
+            "has_video": bool(item.get("has_video")),
+            "assets": public_word_assets(item, user_id),
+            **generation,
+            "updated_at": item.get("updated_at"),
+            "generated_at": item.get("generated_at"),
+        })
+    return {"words": public_items, "total": len(items)}
+
+
+@app.get("/stats")
+async def stats_page_data():
+    return public_stats()
+
+
+@app.post("/stats/action")
+async def record_action_endpoint(payload: StatActionRequest):
+    record_stat_action(payload.action, payload.target_type, payload.target_id, metadata=payload.metadata)
+    return {"saved": True}
+
+
+@app.post("/words/{word_id}/rating")
+async def rate_word(word_id: str, payload: WordRatingRequest, request: Request, response: Response):
+    if payload.rating < 1 or payload.rating > 5:
+        raise HTTPException(status_code=400, detail={"message": "評分必須介於 1 到 5。"})
+    db = load_word_db()
+    word = db.get("words", {}).get(word_id)
+    if not word:
+        raise HTTPException(status_code=404, detail={"message": "找不到這個詞語。"})
+    user_id = review_user_id(request, response)
+    ratings = word.setdefault("ratings", {})
+    existing = ratings.get(user_id, {})
+    ratings[user_id] = {
+        "rating": payload.rating,
+        "note": payload.note,
+        "created_at": existing.get("created_at", time.time()),
+        "updated_at": time.time(),
+    }
+    word.update(word_rating_summary(word, user_id))
+    word["updated_at"] = time.time()
+    db["words"][word_id] = word
+    save_word_db(db)
+    record_stat_action("rate_word", "word", word_id)
+    return {"saved": True, "stats": word_rating_summary(word, user_id)}
+
+
+@app.post("/words/{word_id}/generate")
+async def generate_word_asset_endpoint(word_id: str, request: Request, response: Response):
+    user_id = review_user_id(request, response)
+    word, job = enqueue_word_generation_job(word_id, user_id, reviewer_display_name(user_id))
+    admin_or_token = is_authorized(request, None, None)
+    return {
+        "queued": True,
+        "job": present_job(job, admin_or_token, user_id) if job else None,
+        "word": {
+            k: word.get(k)
+            for k in (
+                "id",
+                "source",
+                "taigi",
+                "tailo",
+                "has_audio",
+                "has_video",
+                "problem",
+                "generation_status",
+                "generation_stage",
+                "generation_progress",
+                "generation_position",
+                "generation_job_id",
+            )
+        },
+    }
+
+
+@app.post("/words/{word_id}/issue")
+async def report_word_issue(word_id: str, payload: WordIssueRequest):
+    db = load_word_db()
+    word = db.get("words", {}).get(word_id)
+    if not word:
+        raise HTTPException(status_code=404, detail={"message": "找不到這個詞語。"})
+    word["problem"] = True
+    word["problem_reason"] = payload.reason.strip() or "使用者回報詞語素材有問題"
+    word["problem_reported_at"] = time.time()
+    db["words"][word_id] = word
+    save_word_db(db)
+    return {"saved": True, "word": {k: word.get(k) for k in ("id", "source", "taigi", "tailo", "problem", "problem_reason")}}
+
+
+@app.post("/words/{word_id}/assets/{asset_id}/rating")
+async def rate_word_asset(word_id: str, asset_id: str, payload: WordAssetRatingRequest, request: Request, response: Response):
+    if payload.rating < 1 or payload.rating > 5:
+        raise HTTPException(status_code=400, detail={"message": "評分必須介於 1 到 5。"})
+    db = load_word_db()
+    word = db.get("words", {}).get(word_id)
+    if not word:
+        raise HTTPException(status_code=404, detail={"message": "找不到這個詞語。"})
+    assets = word.setdefault("assets", [])
+    if asset_id == "legacy" and not assets and word.get("audio_path"):
+        assets.append({
+            "id": "legacy",
+            "audio_path": word.get("audio_path"),
+            "video_path": word.get("video_path"),
+            "has_audio": bool(word.get("has_audio")),
+            "has_video": bool(word.get("has_video")),
+            "created_at": word.get("generated_at") or word.get("updated_at"),
+            "generated_by_id": "system:legacy",
+            "generated_by_name": "系統既有素材",
+            "ratings": {},
+        })
+    asset = next((item for item in assets if item.get("id") == asset_id), None)
+    if not asset:
+        raise HTTPException(status_code=404, detail={"message": "找不到這筆詞語語音。"})
+    user_id = review_user_id(request, response)
+    ratings = asset.setdefault("ratings", {})
+    existing = ratings.get(user_id, {})
+    ratings[user_id] = {
+        "rating": payload.rating,
+        "note": payload.note,
+        "created_at": existing.get("created_at", time.time()),
+        "updated_at": time.time(),
+    }
+    word["assets"] = assets
+    word["updated_at"] = time.time()
+    db["words"][word_id] = word
+    save_word_db(db)
+    record_stat_action("rate_word_asset", "word_asset", f"{word_id}:{asset_id}")
+    return {"saved": True, "stats": word_asset_rating_summary(asset, user_id)}
+
+
+@app.get("/words/{word_id}/download/{kind}")
+async def download_word_asset(word_id: str, kind: Literal["audio", "video"]):
+    db = load_word_db()
+    word = db.get("words", {}).get(word_id)
+    if not word:
+        raise HTTPException(status_code=404, detail={"message": "找不到這個詞語。"})
+    path = Path(word.get("audio_path" if kind == "audio" else "video_path") or "")
+    if not path.exists() or WORD_ASSET_DIR not in path.parents:
+        raise HTTPException(status_code=404, detail={"message": "這個詞語還沒有可下載的素材。"})
+    media_type = "audio/wav" if kind == "audio" else "video/mp4"
+    increment_play(kind, "word", word_id)
+    return FileResponse(path, media_type=media_type, headers={"Content-Disposition": content_disposition(path.name)})
+
+
+@app.get("/words/{word_id}/assets/{asset_id}/download/{kind}")
+async def download_word_asset_variant(word_id: str, asset_id: str, kind: Literal["audio", "video"]):
+    db = load_word_db()
+    word = db.get("words", {}).get(word_id)
+    if not word:
+        raise HTTPException(status_code=404, detail={"message": "找不到這個詞語。"})
+    if asset_id == "legacy":
+        asset = {
+            "audio_path": word.get("audio_path"),
+            "video_path": word.get("video_path"),
+        }
+    else:
+        asset = next((item for item in word.get("assets", []) if item.get("id") == asset_id), None)
+    if not asset:
+        raise HTTPException(status_code=404, detail={"message": "找不到這筆詞語語音。"})
+    path = Path(asset.get("audio_path" if kind == "audio" else "video_path") or "")
+    if not path.exists() or WORD_ASSET_DIR not in path.parents:
+        raise HTTPException(status_code=404, detail={"message": "這筆詞語語音還沒有可下載的素材。"})
+    media_type = "audio/wav" if kind == "audio" else "video/mp4"
+    increment_play(kind, "word", word_id, job_id=asset_id)
+    return FileResponse(path, media_type=media_type, headers={"Content-Disposition": content_disposition(path.name)})
 
 
 @app.get("/admin/settings")
@@ -1111,33 +2788,53 @@ async def update_admin_settings(
     authorization: Annotated[Optional[str], Header()] = None,
 ):
     require_auth(request, taigi_web_token_cookie, authorization)
+    schema_name = postgres_schema_name(settings.postgres_schema)
     normalized = settings.model_copy(update={
         "public_rate_limit_seconds": max(60, int(settings.public_rate_limit_seconds)),
         "api_access_token": settings.api_access_token.strip(),
+        "postgres_dsn": settings.postgres_dsn.strip(),
+        "postgres_schema": schema_name,
     })
     save_settings(normalized)
     return normalized
+
+
+@app.post("/admin/postgres/export")
+async def export_postgres(
+    request: Request,
+    taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
+):
+    require_auth(request, taigi_web_token_cookie, authorization)
+    return export_sqlite_to_postgres(load_settings())
 
 
 @app.post("/jobs")
 async def create_job(
     payload: CreateJobRequest,
     request: Request,
+    response: Response,
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
     authorization: Annotated[Optional[str], Header()] = None,
 ):
     admin_or_token = is_authorized(request, taigi_web_token_cookie, authorization)
+    owner_id = review_user_id(request, response)
     if not PUBLIC_ACCESS and not admin_or_token:
         require_auth(request, taigi_web_token_cookie, authorization)
     if not payload.chinese_text.strip():
-        raise HTTPException(status_code=400, detail="Chinese text is required")
-    if not admin_or_token and not is_private_client(request):
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "請先輸入中文稿，空白內容不能建立工作。"},
+        )
+    if not admin_or_token and not is_private_client(request) and not is_authenticated(request):
         enforce_public_rate_limit(request, payload.chinese_text)
+        payload = payload.model_copy(update={"copy_to_onedrive": False})
     job_id = uuid.uuid4().hex
     payload_title = payload.title.strip()
     display_title = title_from_text(payload.chinese_text) if payload_title in {"", "台語語音影片"} else payload_title
     job = Job(
         id=job_id,
+        owner_id=owner_id,
         title=display_title or "台語語音影片",
         status="queued",
         stage="Queued",
@@ -1147,8 +2844,9 @@ async def create_job(
         chinese_text=payload.chinese_text,
     )
     app_data["jobs"].add(job)
+    record_stat_action("create_job", "job", job_id)
     enqueue_job(0 if is_private_client(request) or admin_or_token else 10, job_id, payload)
-    return job
+    return present_job(job, admin_or_token, owner_id)
 
 
 @app.get("/jobs")
@@ -1160,8 +2858,14 @@ async def list_jobs(
     admin_or_token = is_authorized(request, taigi_web_token_cookie, authorization)
     jobs = app_data["jobs"].list()
     if not admin_or_token:
-        jobs = [job for job in jobs if job_is_public(job)]
-    return {"jobs": jobs}
+        jobs = [job for job in jobs if job_is_public(job) or job_is_owned_by_request(job, request)]
+        jobs = sorted(
+            jobs,
+            key=job_sort_score,
+            reverse=True,
+        )
+    user_id = review_user_id(request)
+    return {"jobs": [present_job(job, admin_or_token, user_id) for job in jobs]}
 
 
 @app.get("/jobs/{job_id}")
@@ -1173,7 +2877,7 @@ async def get_job(
 ):
     job = app_data["jobs"].get(job_id)
     require_job_access(job, request, taigi_web_token_cookie, authorization)
-    return job
+    return present_job(job, is_authorized(request, taigi_web_token_cookie, authorization), review_user_id(request))
 
 
 @app.get("/jobs/{job_id}/segments")
@@ -1190,11 +2894,59 @@ async def get_job_segments(
     if not segments_path.exists():
         return {"segments": [], "reviews": []}
     payload = json.loads(segments_path.read_text(encoding="utf-8"))
-    reviews_path = output_dir / "reviews.json"
-    reviews = []
-    if reviews_path.exists():
-        reviews = json.loads(reviews_path.read_text(encoding="utf-8")).get("reviews", [])
-    return {"segments": payload.get("segments", []), "reviews": reviews}
+    reviews = load_reviews(job)
+    user_id = review_user_id(request)
+    segments = payload.get("segments", [])
+    for segment in segments:
+        stats = segment_review_stats(reviews, int(segment.get("index") or 0), user_id)
+        segment.update(stats)
+        segment["rating"] = stats["my_rating"]
+        segment["feedback_count"] = stats["rating_count"]
+    return {"segments": segments, "reviews": reviews}
+
+
+@app.post("/jobs/{job_id}/rating")
+async def save_job_rating(
+    job_id: str,
+    rating: JobRatingRequest,
+    request: Request,
+    response: Response,
+    taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
+):
+    if rating.rating < 1 or rating.rating > 5:
+        raise HTTPException(status_code=400, detail={"message": "評分必須介於 1 到 5。"})
+    job = app_data["jobs"].get(job_id)
+    require_job_access(job, request, taigi_web_token_cookie, authorization)
+    if job.status != "complete":
+        raise HTTPException(status_code=409, detail={"message": "只有完成的工作可以評分。"})
+    user_id = review_user_id(request, response)
+    reviews = load_reviews(job)
+    now = time.time()
+    review = {
+        "target": "job",
+        "segment_index": 0,
+        "user_id": user_id,
+        "rating": rating.rating,
+        "note": rating.note,
+        "corrected_taigi_text": "",
+        "corrected_tailo_text": "",
+        "corrections": [],
+        "updated_at": now,
+    }
+    replaced = False
+    for index, existing in enumerate(reviews):
+        if (existing.get("target") == "job" or existing.get("segment_index") == 0) and existing.get("user_id") == user_id:
+            review["created_at"] = existing.get("created_at", now)
+            reviews[index] = review
+            replaced = True
+            break
+    if not replaced:
+        review["created_at"] = now
+        reviews.append(review)
+    save_reviews(job, reviews)
+    record_stat_action("rate_job", "job", job_id)
+    return {"saved": True, "review": review, "stats": job_rating_summary(job, user_id)}
 
 
 @app.post("/jobs/{job_id}/segments/{segment_index}/feedback")
@@ -1203,6 +2955,7 @@ async def save_segment_feedback(
     segment_index: int,
     feedback: SegmentFeedback,
     request: Request,
+    response: Response,
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
     authorization: Annotated[Optional[str], Header()] = None,
 ):
@@ -1215,28 +2968,40 @@ async def save_segment_feedback(
     if not segments_path.exists():
         raise HTTPException(status_code=404, detail="Segments not found")
 
-    reviews_path = output_dir / "reviews.json"
-    reviews_payload = {"reviews": []}
-    if reviews_path.exists():
-        reviews_payload = json.loads(reviews_path.read_text(encoding="utf-8"))
-        reviews_payload.setdefault("reviews", [])
+    user_id = review_user_id(request, response)
+    reviews = load_reviews(job)
+    now = time.time()
     review = {
         "segment_index": segment_index,
+        "user_id": user_id,
         "rating": feedback.rating,
         "note": feedback.note,
         "corrected_taigi_text": feedback.corrected_taigi_text,
         "corrected_tailo_text": feedback.corrected_tailo_text,
         "corrections": [item.model_dump() for item in feedback.corrections],
-        "created_at": time.time(),
+        "updated_at": now,
     }
-    reviews_payload["reviews"].append(review)
-    reviews_path.write_text(json.dumps(reviews_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    replaced = False
+    for index, existing in enumerate(reviews):
+        if existing.get("segment_index") == segment_index and existing.get("user_id") == user_id:
+            review["created_at"] = existing.get("created_at", now)
+            reviews[index] = review
+            replaced = True
+            break
+    if not replaced:
+        review["created_at"] = now
+        reviews.append(review)
+    save_reviews(job, reviews)
+    stats = segment_review_stats(reviews, segment_index, user_id)
 
     segments_payload = json.loads(segments_path.read_text(encoding="utf-8"))
     for segment in segments_payload.get("segments", []):
         if segment.get("index") == segment_index:
-            segment["rating"] = feedback.rating
-            segment["feedback_count"] = int(segment.get("feedback_count") or 0) + 1
+            segment["rating"] = stats["my_rating"]
+            segment["my_rating"] = stats["my_rating"]
+            segment["average_rating"] = stats["average_rating"]
+            segment["rating_count"] = stats["rating_count"]
+            segment["feedback_count"] = stats["rating_count"]
             if feedback.corrected_taigi_text.strip():
                 segment["corrected_taigi_text"] = feedback.corrected_taigi_text.strip()
             if feedback.corrected_tailo_text.strip():
@@ -1244,7 +3009,70 @@ async def save_segment_feedback(
             break
     segments_path.write_text(json.dumps(segments_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     remember_feedback(job_id, segment_index, feedback)
-    return {"saved": True, "review": review}
+    record_stat_action("rate_segment", "segment", f"{job_id}:{segment_index}")
+    return {"saved": True, "review": review, "stats": stats}
+
+
+@app.post("/jobs/{job_id}/regenerate")
+async def regenerate_job_from_corrections(
+    job_id: str,
+    request: Request,
+    response: Response,
+    taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
+):
+    source_job = app_data["jobs"].get(job_id)
+    require_job_access(source_job, request, taigi_web_token_cookie, authorization)
+    output_dir = Path(source_job.output_dir or JOB_ROOT / job_id / "output")
+    segments_path = output_dir / "segments.json"
+    if not segments_path.exists():
+        raise HTTPException(status_code=404, detail={"message": "找不到分段資料，無法用修正稿重新生成。"})
+    segments = json.loads(segments_path.read_text(encoding="utf-8")).get("segments", [])
+    if not segments:
+        raise HTTPException(status_code=400, detail={"message": "這個工作沒有可重新生成的分段。"})
+
+    chinese_text = "\n".join(str(segment.get("source_text") or "").strip() for segment in segments).strip()
+    taigi_override = "\n".join(
+        str(segment.get("corrected_taigi_text") or segment.get("taigi_text") or "").strip()
+        for segment in segments
+    ).strip()
+    if not taigi_override:
+        raise HTTPException(status_code=400, detail={"message": "沒有台語文字或修正後台語文字可用來重新生成。"})
+
+    admin_or_token = is_authorized(request, taigi_web_token_cookie, authorization)
+    owner_id = review_user_id(request, response)
+    if not admin_or_token and not is_private_client(request):
+        enforce_public_rate_limit(request, chinese_text)
+    settings = load_settings()
+    payload = CreateJobRequest(
+        title=f"{source_job.title} 修正版",
+        chinese_text=chinese_text,
+        taigi_override=taigi_override,
+        reference_voice_mode=settings.default_reference_voice_mode,
+        control="default_male",
+        device=DEFAULT_DEVICE,
+        inference_timesteps=10,
+        cfg_value=2.5,
+        max_chars_per_segment=90,
+        make_video=True,
+        copy_to_onedrive=DEFAULT_COPY_TO_ONEDRIVE if admin_or_token or is_private_client(request) else False,
+    )
+    new_job_id = uuid.uuid4().hex
+    new_job = Job(
+        id=new_job_id,
+        owner_id=owner_id,
+        title=payload.title,
+        status="queued",
+        stage="Queued",
+        progress=0,
+        created_at=time.time(),
+        updated_at=time.time(),
+        chinese_text=payload.chinese_text,
+    )
+    app_data["jobs"].add(new_job)
+    record_stat_action("regenerate_job", "job", new_job_id)
+    enqueue_job(0 if is_private_client(request) or admin_or_token else 10, new_job_id, payload)
+    return present_job(new_job, admin_or_token, owner_id)
 
 
 @app.delete("/jobs/{job_id}")
@@ -1284,6 +3112,10 @@ async def download_job_file(
     path = files[kind]
     if not path or not path.exists():
         raise HTTPException(status_code=404, detail="Output file not found")
+    if kind == "audio":
+        increment_play("audio", "job", job_id)
+    elif kind == "video":
+        increment_play("video", "job", job_id)
     return FileResponse(path, headers={"Content-Disposition": content_disposition(path.name)})
 
 
@@ -1301,4 +3133,5 @@ async def download_segment_audio(
     path = output_dir / "segments" / f"seg_{segment_index:02d}.wav"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Segment audio not found")
+    increment_play("audio", "segment", f"{segment_index}", job_id=job_id)
     return FileResponse(path, media_type="audio/wav", headers={"Content-Disposition": content_disposition(path.name)})
