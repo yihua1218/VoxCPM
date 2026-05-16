@@ -85,6 +85,11 @@ STATS_PATH = Path(os.environ.get("TAIGI_WEB_STATS", JOB_ROOT / "stats.json"))
 SQLITE_DB = Path(os.environ.get("TAIGI_WEB_SQLITE_DB", JOB_ROOT / "taigi_web.sqlite3"))
 PUBLIC_STATIC_DIR = Path(os.environ.get("TAIGI_WEB_PUBLIC_STATIC_DIR", JOB_ROOT / "public_static"))
 PUBLIC_STATIC_URL = os.environ.get("TAIGI_WEB_PUBLIC_STATIC_URL", "/static-data").rstrip("/")
+OBJECT_STORAGE_BUCKET = os.environ.get("TAIGI_WEB_OBJECT_STORAGE_BUCKET", "").strip()
+OBJECT_STORAGE_PREFIX = os.environ.get("TAIGI_WEB_OBJECT_STORAGE_PREFIX", "taigi-public").strip().strip("/")
+OBJECT_STORAGE_ENDPOINT_URL = os.environ.get("TAIGI_WEB_OBJECT_STORAGE_ENDPOINT_URL", "").strip().rstrip("/")
+OBJECT_STORAGE_REGION = os.environ.get("TAIGI_WEB_OBJECT_STORAGE_REGION", "").strip()
+OBJECT_STORAGE_PROFILE = os.environ.get("TAIGI_WEB_OBJECT_STORAGE_PROFILE", "").strip()
 PUBLIC_ACCESS = os.environ.get("TAIGI_WEB_PUBLIC_ACCESS", "1").lower() not in {"0", "false", "no", "off"}
 SESSION_COOKIE = "taigi_web_token"
 ADMIN_SESSION_COOKIE = "taigi_admin_session"
@@ -147,6 +152,12 @@ class AppSettings(BaseModel):
     llm_api_base_url: str = os.environ.get("TAIGI_WEB_LLM_API_BASE_URL", "").strip()
     llm_api_key: str = os.environ.get("TAIGI_WEB_LLM_API_KEY", "").strip()
     llm_model: str = os.environ.get("TAIGI_WEB_LLM_MODEL", "").strip()
+    object_storage_bucket: str = OBJECT_STORAGE_BUCKET
+    object_storage_prefix: str = OBJECT_STORAGE_PREFIX
+    object_storage_endpoint_url: str = OBJECT_STORAGE_ENDPOINT_URL
+    object_storage_region: str = OBJECT_STORAGE_REGION
+    object_storage_profile: str = OBJECT_STORAGE_PROFILE
+    object_storage_public_url: str = PUBLIC_STATIC_URL
 
 
 class RandomSentenceRequest(BaseModel):
@@ -168,6 +179,17 @@ class PostgresExportResult(BaseModel):
     kv_rows: int
     job_rows: int
     exported_at: float
+
+
+class StaticSyncResult(BaseModel):
+    synced: bool
+    bucket: str
+    prefix: str
+    destination: str
+    file_count: int
+    byte_count: int
+    synced_at: float
+    public_url: str = ""
 
 
 class Job(BaseModel):
@@ -561,11 +583,73 @@ def export_sqlite_to_postgres(settings: AppSettings) -> PostgresExportResult:
     return result
 
 
+def public_static_inventory() -> tuple[int, int]:
+    if not PUBLIC_STATIC_DIR.exists():
+        return 0, 0
+    files = [path for path in PUBLIC_STATIC_DIR.rglob("*") if path.is_file()]
+    return len(files), sum(path.stat().st_size for path in files)
+
+
+def sync_public_static_to_object_storage(settings: AppSettings) -> StaticSyncResult:
+    export_public_snapshots()
+    bucket = settings.object_storage_bucket.strip()
+    if not bucket:
+        raise HTTPException(status_code=400, detail={"message": "請先設定 S3/R2 bucket 名稱。"})
+    aws_bin = shutil.which("aws")
+    if not aws_bin:
+        raise HTTPException(status_code=502, detail={"message": "找不到 aws CLI。請先安裝 AWS CLI，或在伺服器 PATH 中提供 aws 指令。"})
+    prefix = settings.object_storage_prefix.strip().strip("/")
+    destination = f"s3://{bucket}/{prefix}" if prefix else f"s3://{bucket}"
+    command = [
+        aws_bin,
+        "s3",
+        "sync",
+        str(PUBLIC_STATIC_DIR),
+        destination,
+        "--delete",
+        "--only-show-errors",
+    ]
+    if settings.object_storage_endpoint_url.strip():
+        command.extend(["--endpoint-url", settings.object_storage_endpoint_url.strip().rstrip("/")])
+    if settings.object_storage_region.strip():
+        command.extend(["--region", settings.object_storage_region.strip()])
+    if settings.object_storage_profile.strip():
+        command.extend(["--profile", settings.object_storage_profile.strip()])
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True, timeout=60 * 10)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or str(exc)).strip()
+        raise HTTPException(status_code=502, detail={"message": f"同步靜態資料到 object storage 失敗：{detail}"}) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail={"message": "同步靜態資料逾時。"}) from exc
+    file_count, byte_count = public_static_inventory()
+    result = StaticSyncResult(
+        synced=True,
+        bucket=bucket,
+        prefix=prefix,
+        destination=destination,
+        file_count=file_count,
+        byte_count=byte_count,
+        synced_at=time.time(),
+        public_url=settings.object_storage_public_url.strip().rstrip("/"),
+    )
+    db_set_json("static_last_sync", result.model_dump())
+    return result
+
+
 app_data = {"jobs": JobStore()}
 
 
+def effective_public_static_url() -> str:
+    try:
+        settings = load_settings()
+        return (settings.object_storage_public_url.strip().rstrip("/") or PUBLIC_STATIC_URL)
+    except Exception:
+        return PUBLIC_STATIC_URL
+
+
 def static_public_url(key: str) -> str:
-    return f"{PUBLIC_STATIC_URL}/{key.lstrip('/')}"
+    return f"{effective_public_static_url()}/{key.lstrip('/')}"
 
 
 def static_write_json(key: str, payload: dict):
@@ -3417,6 +3501,12 @@ async def update_admin_settings(
         "llm_api_base_url": settings.llm_api_base_url.strip().rstrip("/"),
         "llm_api_key": settings.llm_api_key.strip(),
         "llm_model": settings.llm_model.strip(),
+        "object_storage_bucket": settings.object_storage_bucket.strip(),
+        "object_storage_prefix": settings.object_storage_prefix.strip().strip("/"),
+        "object_storage_endpoint_url": settings.object_storage_endpoint_url.strip().rstrip("/"),
+        "object_storage_region": settings.object_storage_region.strip(),
+        "object_storage_profile": settings.object_storage_profile.strip(),
+        "object_storage_public_url": settings.object_storage_public_url.strip().rstrip("/") or PUBLIC_STATIC_URL,
     })
     save_settings(normalized)
     return normalized
@@ -3430,6 +3520,16 @@ async def export_postgres(
 ):
     require_auth(request, taigi_web_token_cookie, authorization)
     return export_sqlite_to_postgres(load_settings())
+
+
+@app.post("/admin/static/sync")
+async def sync_static_storage(
+    request: Request,
+    taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
+):
+    require_auth(request, taigi_web_token_cookie, authorization)
+    return sync_public_static_to_object_storage(load_settings())
 
 
 @app.post("/jobs")

@@ -1158,6 +1158,12 @@ interface AdminSettings {
   llm_api_base_url: string;
   llm_api_key: string;
   llm_model: string;
+  object_storage_bucket: string;
+  object_storage_prefix: string;
+  object_storage_endpoint_url: string;
+  object_storage_region: string;
+  object_storage_profile: string;
+  object_storage_public_url: string;
 }
 
 interface RandomSentenceResponse {
@@ -1173,6 +1179,17 @@ interface PostgresExportResult {
   kv_rows: number;
   job_rows: number;
   exported_at: number;
+}
+
+interface StaticSyncResult {
+  synced: boolean;
+  bucket: string;
+  prefix: string;
+  destination: string;
+  file_count: number;
+  byte_count: number;
+  synced_at: number;
+  public_url?: string;
 }
 
 interface QueueStatus {
@@ -1495,6 +1512,8 @@ function App() {
   const [regenerating, setRegenerating] = useState(false);
   const [exportingPostgres, setExportingPostgres] = useState(false);
   const [postgresExportResult, setPostgresExportResult] = useState<PostgresExportResult | null>(null);
+  const [syncingStatic, setSyncingStatic] = useState(false);
+  const [staticSyncResult, setStaticSyncResult] = useState<StaticSyncResult | null>(null);
   const [loadingJobs, setLoadingJobs] = useState(false);
   const [requestingSourceExport, setRequestingSourceExport] = useState(false);
   const [sourceRequestWord, setSourceRequestWord] = useState('');
@@ -1830,6 +1849,21 @@ function App() {
       message.error((detail && typeof detail === 'object' ? detail.message : detail) || '無法匯出到 PostgreSQL');
     } finally {
       setExportingPostgres(false);
+    }
+  };
+
+  const syncStaticStorage = async () => {
+    setSyncingStatic(true);
+    setStaticSyncResult(null);
+    try {
+      const res = await axios.post<StaticSyncResult>('/admin/static/sync', {}, { timeout: 600000 });
+      setStaticSyncResult(res.data);
+      message.success('已同步公開靜態資料到 object storage');
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      message.error((detail && typeof detail === 'object' ? detail.message : detail) || '無法同步靜態資料');
+    } finally {
+      setSyncingStatic(false);
     }
   };
 
@@ -2832,6 +2866,55 @@ function App() {
                                       showIcon
                                       message="已完成 PostgreSQL 匯出"
                                       description={`Schema ${postgresExportResult.schema_name}：${postgresExportResult.kv_rows} 筆設定資料，${postgresExportResult.job_rows} 筆 Jobs。`}
+                                    />
+                                  )}
+                                </Space>
+                              ),
+                            },
+                          ]}
+                        />
+                        <Collapse
+                          ghost
+                          className="advanced-settings"
+                          items={[
+                            {
+                              key: 'static-storage',
+                              label: 'S3/R2 靜態資料同步',
+                              children: (
+                                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                                  <Paragraph type="secondary" style={{ margin: 0 }}>
+                                    前端和公開 snapshot 會先輸出到本機 static-data，再用 AWS CLI 同步到 S3/R2/GCS 相容 bucket。
+                                    Access key 建議放在伺服器環境變數或 AWS profile，不要填在網頁設定內。
+                                  </Paragraph>
+                                  <Form.Item label="Bucket" name="object_storage_bucket">
+                                    <Input placeholder="例如：taigi-public-static" />
+                                  </Form.Item>
+                                  <Form.Item label="Prefix" name="object_storage_prefix">
+                                    <Input placeholder="例如：public 或 taigi-public" />
+                                  </Form.Item>
+                                  <Form.Item label="Endpoint URL（R2/MinIO 才需要）" name="object_storage_endpoint_url">
+                                    <Input placeholder="https://<accountid>.r2.cloudflarestorage.com" />
+                                  </Form.Item>
+                                  <Form.Item label="Region" name="object_storage_region">
+                                    <Input placeholder="auto、ap-northeast-1 等" />
+                                  </Form.Item>
+                                  <Form.Item label="AWS profile" name="object_storage_profile">
+                                    <Input placeholder="留空使用環境變數或 default profile" />
+                                  </Form.Item>
+                                  <Form.Item label="Public CDN URL" name="object_storage_public_url">
+                                    <Input placeholder="https://static.taigi.yihua.app" />
+                                  </Form.Item>
+                                  <Flex gap={10} wrap>
+                                    <Button onClick={syncStaticStorage} loading={syncingStatic}>
+                                      同步 static-data 到 S3/R2
+                                    </Button>
+                                  </Flex>
+                                  {staticSyncResult && (
+                                    <Alert
+                                      type="success"
+                                      showIcon
+                                      message="已完成靜態資料同步"
+                                      description={`${staticSyncResult.destination}：${staticSyncResult.file_count} 個檔案，${(staticSyncResult.byte_count / 1024 / 1024).toFixed(2)} MB。`}
                                     />
                                   )}
                                 </Space>
