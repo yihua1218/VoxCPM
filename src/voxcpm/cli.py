@@ -258,6 +258,9 @@ def _run_single(args, parser, *, text: str, output: str, prompt_text: str | None
         reference_wav_path=args.reference_audio,
         cfg_value=args.cfg_value,
         inference_timesteps=args.inference_timesteps,
+        retry_badcase=args.retry_badcase,
+        retry_badcase_max_times=args.retry_badcase_max_times,
+        retry_badcase_ratio_threshold=args.retry_badcase_ratio_threshold,
         normalize=args.normalize,
         denoise=args.denoise
         and (args.prompt_audio is not None or args.reference_audio is not None),
@@ -386,6 +389,23 @@ def _add_common_generation_args(parser):
         type=int,
         default=10,
         help="Inference steps (int, recommended 4–30, default: 10)",
+    )
+    parser.add_argument(
+        "--retry-badcase",
+        action="store_true",
+        help="Retry when generated audio is abnormally long for the target text",
+    )
+    parser.add_argument(
+        "--retry-badcase-max-times",
+        type=int,
+        default=3,
+        help="Maximum badcase retries when --retry-badcase is enabled",
+    )
+    parser.add_argument(
+        "--retry-badcase-ratio-threshold",
+        type=float,
+        default=6.0,
+        help="Audio/text length ratio threshold for --retry-badcase",
     )
     parser.add_argument(
         "--normalize", action="store_true", help="Enable text normalization"

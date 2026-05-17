@@ -26,6 +26,7 @@ import {
   CopyOutlined,
   DeleteOutlined,
   DownloadOutlined,
+  FileSearchOutlined,
   FileTextOutlined,
   LinkOutlined,
   LockOutlined,
@@ -42,6 +43,32 @@ const { Header, Content, Footer } = Layout;
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
 const STATIC_DATA_BASE = ((import.meta.env.VITE_STATIC_DATA_BASE_URL as string | undefined) || '/static-data/public').replace(/\/$/, '');
+const AUTH_SESSION_STORAGE_KEY = 'taigi_web_session_token';
+
+function setAuthSessionToken(token: string | null) {
+  if (token) {
+    axios.defaults.headers.common.Authorization = `Bearer ${token}`;
+    try {
+      window.localStorage.setItem(AUTH_SESSION_STORAGE_KEY, token);
+    } catch {
+      // Cookie auth may still work when localStorage is unavailable.
+    }
+  } else {
+    delete axios.defaults.headers.common.Authorization;
+    try {
+      window.localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+    } catch {
+      // Ignore storage failures during logout.
+    }
+  }
+}
+
+try {
+  const storedSessionToken = window.localStorage.getItem(AUTH_SESSION_STORAGE_KEY);
+  if (storedSessionToken) setAuthSessionToken(storedSessionToken);
+} catch {
+  // Ignore storage failures; the server cookie remains the primary auth path.
+}
 
 type UiLanguage = 'zh-Hant' | 'zh-Hans' | 'en' | 'ja' | 'ko' | 'taigi' | 'tailo';
 
@@ -67,8 +94,9 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     jobs: '工作總覽',
     lexicon: '語詞資料庫',
     stats: '統計趨勢',
-    sources: '來源授權',
+    sources: '資料來源與授權',
     about: '關於',
+    preferences: '偏好設定',
     refresh: '重新整理',
     signOut: '登出',
     dateTimeFormat: '時間格式',
@@ -110,7 +138,9 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     lexiconEmpty: '目前沒有符合的詞語',
     requestNewWord: '申請新增詞料',
     requestNewWordHint: '查不到這個詞語，可以送出新增申請，讓系統記錄待整理的台語詞料。',
-    sourcesTitle: '來源授權治理台帳',
+    itaigiReference: '開啟 iTaigi 參考',
+    itaigiReferenceHint: '先開啟 iTaigi 人工查詢比較講法；不會自動匯入外部資料。',
+    sourcesTitle: '資料來源與授權',
     requestCorpus: '申請多語系語料',
     multilingualCorpus: '多語系語料',
     pendingReview: '待補稿',
@@ -135,6 +165,7 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     stats: '统计趋势',
     sources: '来源授权',
     about: '关于',
+    preferences: '偏好设置',
     refresh: '刷新',
     signOut: '登出',
     dateTimeFormat: '时间格式',
@@ -176,7 +207,9 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     lexiconEmpty: '目前没有符合的词语',
     requestNewWord: '申请新增词料',
     requestNewWordHint: '查不到这个词语，可以送出新增申请，让系统记录待整理的台语词料。',
-    sourcesTitle: '来源授权治理台账',
+    itaigiReference: '打开 iTaigi 参考',
+    itaigiReferenceHint: '先打开 iTaigi 人工查询比较说法；不会自动导入外部资料。',
+    sourcesTitle: '数据来源与授权',
     requestCorpus: '申请多语系语料',
     multilingualCorpus: '多语系语料',
     pendingReview: '待补稿',
@@ -201,6 +234,7 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     stats: 'Stats',
     sources: 'Sources',
     about: 'About',
+    preferences: 'Preferences',
     refresh: 'Refresh',
     signOut: 'Sign out',
     dateTimeFormat: 'Time format',
@@ -242,7 +276,9 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     lexiconEmpty: 'No matching entries',
     requestNewWord: 'Request new entry',
     requestNewWordHint: 'No match found. You can request a new lexicon entry for review.',
-    sourcesTitle: 'Source and License Governance Ledger',
+    itaigiReference: 'Open iTaigi reference',
+    itaigiReferenceHint: 'Open iTaigi for manual comparison first; external data is not imported automatically.',
+    sourcesTitle: 'Data Sources and Licenses',
     requestCorpus: 'Request multilingual corpus',
     multilingualCorpus: 'Multilingual corpus',
     pendingReview: 'Pending',
@@ -267,6 +303,7 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     stats: '統計',
     sources: '出典',
     about: '概要',
+    preferences: '設定',
     refresh: '更新',
     signOut: 'サインアウト',
     dateTimeFormat: '日時形式',
@@ -308,7 +345,9 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     lexiconEmpty: '一致する語彙はありません',
     requestNewWord: '新規語彙を申請',
     requestNewWordHint: '見つからない語彙は、新規候補として申請できます。',
-    sourcesTitle: '出典・ライセンス管理台帳',
+    itaigiReference: 'iTaigi 参照を開く',
+    itaigiReferenceHint: 'まず iTaigi を開いて手動で表現を比較します。外部データは自動取り込みしません。',
+    sourcesTitle: '出典とライセンス',
     requestCorpus: '多言語コーパス申請',
     multilingualCorpus: '多言語コーパス',
     pendingReview: '未翻訳',
@@ -333,6 +372,7 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     stats: '통계',
     sources: '출처',
     about: '소개',
+    preferences: '설정',
     refresh: '새로고침',
     signOut: '로그아웃',
     dateTimeFormat: '시간 형식',
@@ -374,7 +414,9 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     lexiconEmpty: '일치하는 항목이 없습니다',
     requestNewWord: '새 어휘 신청',
     requestNewWordHint: '찾을 수 없는 어휘는 새 후보로 신청할 수 있습니다.',
-    sourcesTitle: '출처 및 라이선스 관리 대장',
+    itaigiReference: 'iTaigi 참고 열기',
+    itaigiReferenceHint: '먼저 iTaigi를 열어 수동으로 표현을 비교합니다. 외부 데이터는 자동으로 가져오지 않습니다.',
+    sourcesTitle: '자료 출처와 라이선스',
     requestCorpus: '다국어 말뭉치 신청',
     multilingualCorpus: '다국어 말뭉치',
     pendingReview: '대기',
@@ -397,8 +439,9 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     jobs: '工課總覽',
     lexicon: '語詞資料庫',
     stats: '統計趨勢',
-    sources: '來源授權',
+    sources: '資料來源佮授權',
     about: '關於',
+    preferences: '偏好設定',
     refresh: '閣整理',
     signOut: '登出',
     dateTimeFormat: '時間格式',
@@ -440,7 +483,9 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     lexiconEmpty: '目前無符合的語詞',
     requestNewWord: '申請新增詞料',
     requestNewWordHint: '查無這个語詞，會使送出新增申請，予系統記錄待整理的台語詞料。',
-    sourcesTitle: '來源授權治理台帳',
+    itaigiReference: '開 iTaigi 參考',
+    itaigiReferenceHint: '先開 iTaigi 人工查詢比較講法；袂自動匯入外部資料。',
+    sourcesTitle: '資料來源佮授權',
     requestCorpus: '申請多語系語料',
     multilingualCorpus: '多語系語料',
     pendingReview: '咧等補稿',
@@ -465,6 +510,7 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     stats: 'Thong-kè',
     sources: 'Guân-thâu',
     about: 'Kuan-î',
+    preferences: 'Phiàn-hó siat-tīng',
     refresh: 'Koh tsíng-lí',
     signOut: 'Teng-tshut',
     dateTimeFormat: 'Sî-kan keh-sik',
@@ -506,7 +552,9 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     lexiconEmpty: 'Bô ha̍p ê gí-sû',
     requestNewWord: 'Tshing-kiû sin gí-liāu',
     requestNewWordHint: 'Tshiau bô gí-sû ê sî, ē-tàng tshing-kiû tsò sin ê hāu-suán.',
-    sourcesTitle: 'Guân-thâu sû-khuân tī-lí tâi-tiùnn',
+    itaigiReference: 'Khui iTaigi tsham-khó',
+    itaigiReferenceHint: 'Sing khui iTaigi lâng-kang tshiau-tshuē pí-kàu; bē tsū-tōng huī-ji̍p guā-pōo tsu-liāu.',
+    sourcesTitle: 'Tsu-liāu guân-thâu kap sû-khuân',
     requestCorpus: 'Tshing-kiû tō-gí-hē gí-liāu',
     multilingualCorpus: 'Tō-gí-hē gí-liāu',
     pendingReview: 'Tán póo-kó',
@@ -669,9 +717,12 @@ type SourceRowKey =
   | 'frontend'
   | 'ffmpeg'
   | 'storage'
+  | 'breezeAsr'
+  | 'mmsTts'
   | 'seed'
   | 'userContribution'
   | 'moe'
+  | 'itaigi'
   | 'chhoeTaigi'
   | 'external';
 
@@ -688,12 +739,12 @@ interface SourceCopy {
     usage: string;
     governance: string;
   };
-  rows: Record<SourceRowKey, {
+  rows: Partial<Record<SourceRowKey, {
     statusTag: string;
     status: string;
     usage: string;
     governance: string;
-  }>;
+  }>>;
   rowNames?: Partial<Record<SourceRowKey, { name: string; note?: string }>>;
   alertTitle: string;
   alertDescription: string;
@@ -790,6 +841,28 @@ const SOURCE_ROW_CONFIG: Array<{
     ],
   },
   {
+    key: 'breezeAsr',
+    section: 'tools',
+    name: 'Breeze-ASR-26',
+    note: '台語音訊校對與 ASR 對照。',
+    color: 'success',
+    links: [
+      { label: 'Hugging Face', href: 'https://huggingface.co/MediaTek-Research/Breeze-ASR-26' },
+      { label: 'Paper', href: 'https://huggingface.co/papers/2603.19259' },
+    ],
+  },
+  {
+    key: 'mmsTts',
+    section: 'tools',
+    name: 'MMS-TTS Min Nan',
+    note: '非商用聲音對照，不作商業產出。',
+    color: 'warning',
+    links: [
+      { label: 'MMS-TTS nan', href: 'https://huggingface.co/facebook/mms-tts-nan' },
+      { label: 'MMS-TTS', href: 'https://huggingface.co/facebook/mms-tts' },
+    ],
+  },
+  {
     key: 'seed',
     section: 'dictionaries',
     name: '內建種子語詞',
@@ -816,12 +889,24 @@ const SOURCE_ROW_CONFIG: Array<{
   {
     key: 'chhoeTaigi',
     section: 'dictionaries',
-    name: 'ChhoeTaigi / iTaigi 類型社群資源',
+    name: 'ChhoeTaigi 社群資源',
     color: 'warning',
     links: [
       { label: 'ChhoeTaigi', href: 'https://chhoe.taigi.info/' },
-      { label: 'iTaigi', href: 'https://itaigi.tw/' },
       { label: 'ChhoeTaigiDatabase', href: 'https://github.com/ChhoeTaigi/ChhoeTaigiDatabase' },
+    ],
+  },
+  {
+    key: 'itaigi',
+    section: 'dictionaries',
+    name: 'iTaigi 群眾台語辭典',
+    note: '本站目前只做人工查詢參考，不自動匯入。',
+    color: 'warning',
+    links: [
+      { label: 'iTaigi', href: 'https://itaigi.tw/' },
+      { label: 'GitHub', href: 'https://github.com/i3thuan5/itaigi' },
+      { label: 'CC0', href: 'https://creativecommons.org/publicdomain/zero/1.0/' },
+      { label: 'API docs', href: 'http://docs.tai5uan5gian5gi2phing5thai5.apiary.io/#' },
     ],
   },
   {
@@ -835,7 +920,7 @@ const SOURCE_ROW_CONFIG: Array<{
 
 const SOURCE_COPY: Record<UiLanguage, SourceCopy> = {
   'zh-Hant': {
-    intro: '這裡按照公開營運前的授權治理建議，記錄每個工具、模型、辭源與公開資料庫的來源、授權狀態、本站用途與治理動作。「待確認」的資料只做人工查詢或校稿參考，不直接批次匯入、再散布或作為可下載資料庫。',
+    intro: '這裡整理每個工具、模型、辭源與公開資料庫的來源、授權狀態、本站用途與後續管理方式。「待確認」的資料只做人工查詢或校稿參考，不直接批次匯入、再散布或作為可下載資料庫。',
     governanceTitle: '授權狀態分類',
     governanceTags: [
       { color: 'success', label: '可納入系統依賴' },
@@ -861,9 +946,12 @@ const SOURCE_COPY: Record<UiLanguage, SourceCopy> = {
       frontend: { statusTag: 'MIT / Apache-2.0', status: '本機 npm metadata：React、Ant Design、Vite 為 MIT；TypeScript 為 Apache-2.0。', usage: 'Web UI、表單、評分、分頁、統計與來源授權頁。', governance: '保留前端依賴版本；公開部署前建立 dependency notice。' },
       ffmpeg: { statusTag: 'GPL-3.0-or-later build', status: '目前部署使用 /opt/homebrew/bin/ffmpeg 8.1；Homebrew formula 標示 GPL-3.0-or-later。編譯參數包含 --enable-gpl、libx264、libx265，未見 --enable-nonfree。', usage: 'Server-side only：合併音訊、讀取時長、使用 libx264/aac 輸出字幕波形 mp4；目前未把 FFmpeg binary 提供下載或包進前端。', governance: '短期保留版本、路徑、formula、編譯參數與 Legal 連結。長期若要降低散布義務，改建 LGPL-only FFmpeg 並避免 libx264/libx265。' },
       storage: { statusTag: '資料儲存工具', status: 'SQLite public domain；PostgreSQL 使用 PostgreSQL License。', usage: '保存 Jobs、詞語、評分、統計、匿名暱稱與備份匯出。', governance: '資料庫內每筆外部匯入資料需保留 source、license、retrieved_at 欄位。' },
+      breezeAsr: { statusTag: 'Apache-2.0', status: '模型卡標示 Apache-2.0。', usage: '可選用於音訊校對：將台語音訊轉寫後與原稿比對，產生 CER、相似度與疑似錯誤。', governance: '模型預設不自動下載；啟用前需固定模型版本、記錄模型連結與輸出為 AI 輔助校對。' },
+      mmsTts: { statusTag: 'CC-BY-NC-4.0', status: 'Meta MMS-TTS-nan 為非商用授權。', usage: '只作非商用 A/B 對照聲音，不作本站商業產出，也不混入可下載資料庫。', governance: '預設關閉；若啟用，UI 與來源頁須標示非商用限制，公開服務不得把結果作商業用途。' },
       seed: { statusTag: '本站整理', status: '人工整理的起始資料。', usage: '作為查詢、測試、分詞與語音生成的初始詞庫。', governance: '每筆保留建立者、建立時間、後續修正與評分紀錄。' },
       userContribution: { statusTag: '使用者貢獻', status: '需在服務條款明示可用於改善本站資料庫。', usage: '建立轉譯記憶、語詞資料庫、音訊版本排序與品質評分。', governance: '匿名者保留匿名暱稱與歷史；登入者保留 email 識別；允許更改自己的評分。' },
       moe: { statusTag: '待正式確認', status: '可公開查詢與下載，但批次匯入、商用與再散布條件需逐項確認。', usage: '目前只作人工校稿與查詞參考，不自動大量匯入本站 SQLite。', governance: '正式匯入前記錄授權條款、下載日期、版本、引用文字與可否再散布。' },
+      itaigi: { statusTag: '人工參考 / 匯入前審核', status: 'iTaigi 專案程式碼標示 MIT；服務條款提到資料庫與貢獻採 CC0 公眾領域貢獻宣告。仍需在本站正式匯入前保留逐筆來源與版本紀錄。', usage: '在詞庫搜尋無精確符合時開啟 iTaigi 查詢，供校稿者比較台語講法與候選詞。', governance: '目前不自動爬取、不批次匯入。若未來匯入，需保存 source_url、license_url、retrieved_at、原始欄位與人工審核紀錄。' },
       chhoeTaigi: { statusTag: '待資料集逐項確認', status: '不同子資料來源可能有不同授權。', usage: '作為人工查詞、比較譯法與候選語詞整理參考。', governance: '若要匯入，需只匯入授權明確且允許本站用途的子集，並保留 source_id。' },
       external: { statusTag: '預設不得匯入', status: '除非授權條款明確允許。', usage: '可供人類查閱後撰寫自己的修正，但不直接爬取或複製進資料庫。', governance: '新增來源前需通過授權欄位審核：license、commercial_use、redistribution、attribution。' },
     },
@@ -871,14 +959,15 @@ const SOURCE_COPY: Record<UiLanguage, SourceCopy> = {
       seed: { name: '內建種子語詞', note: '逐家好、歹勢、毋免客氣、食果子拜樹頭等。' },
       userContribution: { name: '使用者查詢、生成、評分與修正', note: '本站使用過程自然累積。' },
       moe: { name: '教育部臺灣台語常用詞辭典' },
-      chhoeTaigi: { name: 'ChhoeTaigi / iTaigi 類型社群資源' },
+      itaigi: { name: 'iTaigi 群眾台語辭典', note: '以外部查詢方式輔助人工校稿。' },
+      chhoeTaigi: { name: 'ChhoeTaigi 社群資源' },
       external: { name: '其他公開辭典、論文、語料與新聞內容', note: '未列入本站自動資料源。' },
     },
     alertTitle: '公開營運前的資料治理規則',
     alertDescription: '正式匯入外部資料前，每筆來源都要有 source_url、license_name、license_url、retrieved_at、version、commercial_use、redistribution、attribution_required 與 notes。未確認可再利用的資料只能做人工查詢參考，不批次匯入、不提供下載、不混入本站自有詞庫。',
   },
   'zh-Hans': {
-    intro: '这里按照公开运营前的授权治理建议，记录每个工具、模型、辞源与公开数据库的来源、授权状态、本站用途与治理动作。“待确认”的资料只做人工查询或校稿参考，不直接批量导入、再散布或作为可下载数据库。',
+    intro: '这里整理每个工具、模型、辞源与公开数据库的来源、授权状态、本站用途与后续管理方式。“待确认”的资料只做人工查询或校稿参考，不直接批量导入、再散布或作为可下载数据库。',
     governanceTitle: '授权状态分类',
     governanceTags: [
       { color: 'success', label: '可纳入系统依赖' },
@@ -964,7 +1053,7 @@ const SOURCE_COPY: Record<UiLanguage, SourceCopy> = {
     alertDescription: 'Before any external source is imported, every source needs source_url, license_name, license_url, retrieved_at, version, commercial_use, redistribution, attribution_required, and notes. Unconfirmed reusable data is manual-reference only: no bulk import, no download export, and no mixing into the first-party lexicon.',
   },
   ja: {
-    intro: 'この台帳は公開運用前のライセンス管理方針に沿って、各ツール、モデル、語彙出典、公開データベースの出典、ライセンス状態、サイト内での用途、必要な管理措置を記録します。「確認待ち」の資料は手作業の参照や校正だけに使い、一括取り込み、再配布、ダウンロード可能なデータベース化はしません。',
+    intro: 'このページでは、各ツール、モデル、語彙出典、公開データベースの出典、ライセンス状態、サイト内での用途、必要な管理措置を整理します。「確認待ち」の資料は手作業の参照や校正だけに使い、一括取り込み、再配布、ダウンロード可能なデータベース化はしません。',
     governanceTitle: 'ライセンス状態の分類',
     governanceTags: [
       { color: 'success', label: '依存関係として利用可' },
@@ -1050,7 +1139,7 @@ const SOURCE_COPY: Record<UiLanguage, SourceCopy> = {
     alertDescription: '외부 자료를 정식으로 가져오기 전 모든 출처는 source_url, license_name, license_url, retrieved_at, version, commercial_use, redistribution, attribution_required, notes 를 가져야 합니다. 재사용이 확인되지 않은 자료는 수동 참고용만 가능하며 일괄 가져오기, 다운로드 제공, 자체 어휘와 혼합을 하지 않습니다.',
   },
   taigi: {
-    intro: '這个台帳照公開營運以前的授權治理建議，記錄逐項工具、模型、辭源佮公開資料庫的來源、授權狀態、本站用途佮治理動作。「待確認」的資料干焦予人查詢、校稿參考，無直接大量匯入、閣散布，嘛無做做會下載的資料庫。',
+    intro: '這頁整理逐項工具、模型、辭源佮公開資料庫的來源、授權狀態、本站用途佮後續管理方式。「待確認」的資料干焦予人查詢、校稿參考，無直接大量匯入、閣散布，嘛無做做會下載的資料庫。',
     governanceTitle: '授權狀態分類',
     governanceTags: [
       { color: 'success', label: '會使納入系統依賴' },
@@ -1093,7 +1182,7 @@ const SOURCE_COPY: Record<UiLanguage, SourceCopy> = {
     alertDescription: '正式匯入外部資料前，逐筆來源攏愛有 source_url、license_name、license_url、retrieved_at、version、commercial_use、redistribution、attribution_required 佮 notes。未確認會使閣利用的資料干焦做人查詢參考，毋大量匯入、毋提供下載、毋混入本站家己的詞庫。',
   },
   tailo: {
-    intro: 'Tsit ê tâi-tiùnn tsiàu kong-khui îng-ūn tsîng ê sû-khuân tī-lí kiàn-gī, kì-lio̍k muí tsi̍t hāng kang-kū, bôo-hîng, sû-guân kap kong-khui tsu-liāu-khòo ê guân-thâu, sû-khuân tsōng-thài, pún-tsām iōng-to͘ kap tī-lí tōng-tsok. “Tán khak-jīn” ê tsu-liāu kan-na tsò jîn-kang tshiau-tshuē kap kàu-kó tsham-khó, bô pi̍t-tshiùnn huī-ji̍p, tsài sàn-pòo, á-sī tsò hóo-táng-tsài ê tsu-liāu-khòo.',
+    intro: 'Tsit ia̍h tsíng-lí muí tsi̍t hāng kang-kū, bôo-hîng, sû-guân kap kong-khui tsu-liāu-khòo ê guân-thâu, sû-khuân tsōng-thài, pún-tsām iōng-to͘ kap āu-sio̍k kuán-lí hong-sik. “Tán khak-jīn” ê tsu-liāu kan-na tsò jîn-kang tshiau-tshuē kap kàu-kó tsham-khó, bô pi̍t-tshiùnn huī-ji̍p, tsài sàn-pòo, á-sī tsò hóo-táng-tsài ê tsu-liāu-khòo.',
     governanceTitle: 'Sû-khuân tsōng-thài hun-luī',
     governanceTags: [
       { color: 'success', label: 'Ē-tàng ji̍p hē-thóng i-lāi' },
@@ -1147,7 +1236,7 @@ function SourceGovernanceCard({ title, copy }: { title: string; copy: SourceCopy
         <Text strong>{copy.columns.governance}</Text>
       </div>
       {SOURCE_ROW_CONFIG.filter((row) => row.section === section).map((row) => {
-        const rowCopy = copy.rows[row.key];
+        const rowCopy = copy.rows[row.key] ?? SOURCE_COPY['zh-Hant'].rows[row.key] ?? SOURCE_COPY['zh-Hant'].rows.external!;
         const rowName = copy.rowNames?.[row.key];
         return (
           <div className="source-row" key={row.key}>
@@ -1246,20 +1335,24 @@ function initialDateTimeFormat(): DateTimeFormatPreference {
 
 type JobStatus = 'queued' | 'running' | 'complete' | 'failed';
 type CompletedJobSort = 'newest' | 'oldest' | 'rating' | 'plays' | 'duration' | 'title';
-type JobKindFilter = 'all' | 'script' | 'segment_regeneration' | 'word_asset' | 'maintenance';
+type JobKindFilter = 'all' | 'script' | 'segment_regeneration' | 'word_asset' | 'maintenance' | 'audio_review';
+type CompletedJobContentFilter = 'all' | 'long_article' | 'short_word_audio';
 type CompletedJobRatingFilter = 'all' | 'rated' | 'unrated';
 type CompletedJobMediaFilter = 'all' | 'video' | 'audio';
+type CompletedJobIssueFilter = 'all' | 'problem' | 'chinese_voice_not_taigi' | 'ok' | 'unreviewed';
 type WordSort = 'rating' | 'newest' | 'plays' | 'usage' | 'source';
 type WordKindFilter = 'all' | 'word' | 'phrase';
 type WordRatingFilter = 'all' | 'rated' | 'unrated';
 type WordMediaFilter = 'all' | 'audio' | 'video' | 'missing_audio';
 type WordStatusFilter = 'all' | 'problem' | 'ok' | 'generating' | 'requested';
 type DateTimeFormatPreference = 'system' | 'taiwan' | 'us' | 'iso';
+type SynthesisSource = 'taigi' | 'tailo';
+type ProblemType = '' | 'chinese_voice_not_taigi';
 type RatingBuckets = Record<'1' | '2' | '3' | '4' | '5', number>;
 
 interface Job {
   id: string;
-  kind?: 'script' | 'word_asset' | 'segment_regeneration' | 'maintenance';
+  kind?: 'script' | 'word_asset' | 'segment_regeneration' | 'maintenance' | 'audio_review';
   title: string;
   status: JobStatus;
   stage: string;
@@ -1286,6 +1379,13 @@ interface Job {
   play_count?: number;
   audio_play_count?: number;
   video_play_count?: number;
+  problem?: boolean;
+  problem_type?: ProblemType | string;
+  problem_reason?: string;
+  problem_reported_at?: number | null;
+  featured_at?: number | null;
+  featured_by?: string;
+  featured_note?: string;
   metadata?: Record<string, unknown>;
   static_media?: Record<string, string>;
 }
@@ -1308,7 +1408,25 @@ interface Segment {
   corrected_taigi_text?: string;
   corrected_tailo_text?: string;
   regenerated_at?: number;
+  last_synthesis_text?: string;
+  last_synthesis_source?: string;
   source_tokens?: SegmentToken[];
+  audio_review?: AudioReviewSegment;
+}
+
+interface AudioReviewSegment {
+  index: number;
+  reference_text?: string;
+  asr_transcript?: string;
+  comparison?: {
+    cer?: number | null;
+    similarity?: number | null;
+    edit_distance?: number | null;
+    reference_length?: number;
+  };
+  issues?: string[];
+  asr_status?: { available?: boolean; reason?: string; model?: string };
+  mms_status?: { available?: boolean; reason?: string; model?: string; audio_file?: string };
 }
 
 interface SegmentToken {
@@ -1353,6 +1471,11 @@ interface AuthStatus {
   token_required: boolean;
   loopback_only: boolean;
   auth_method?: string;
+}
+
+interface VerifyAuthResponse extends AuthStatus {
+  session_token?: string;
+  expires_at?: number;
 }
 
 interface ApiInfo {
@@ -1419,6 +1542,21 @@ interface StaticSyncResult {
   public_url?: string;
 }
 
+interface TermBatchRegenerateResult {
+  dry_run: boolean;
+  search_term: string;
+  taigi_replacement: string;
+  match_count: number;
+  regeneratable_count: number;
+  matched_jobs: Array<{
+    job_id: string;
+    title: string;
+    segment_count: number;
+    regeneratable_count: number;
+  }>;
+  queued_jobs: Job[];
+}
+
 interface QueueStatus {
   authenticated: boolean;
   private_client: boolean;
@@ -1427,7 +1565,8 @@ interface QueueStatus {
     wait_seconds: number;
     can_submit: boolean;
     next_available_at: number;
-    sentence_limit: number;
+    sentence_limit?: number | null;
+    max_chars?: number;
   };
   queue: {
     running_count: number;
@@ -1456,7 +1595,13 @@ interface WordEntry {
   my_rating?: number | null;
   my_note?: string;
   problem?: boolean;
+  problem_type?: ProblemType | string;
   problem_reason?: string;
+  token_review_count?: number;
+  token_problem_count?: number;
+  token_ok_count?: number;
+  token_problem_sources?: string[];
+  token_ok_sources?: string[];
   has_audio?: boolean;
   has_video?: boolean;
   generation_status?: 'idle' | 'queued' | 'running' | 'complete' | 'failed';
@@ -1466,6 +1611,7 @@ interface WordEntry {
   generation_position?: number;
   generation_job_id?: string;
   assets?: WordAsset[];
+  itaigi_reference?: ItaigiReferenceCandidate;
   source_tokens?: SegmentToken[];
   static_media?: {
     audio?: string;
@@ -1486,10 +1632,36 @@ interface WordEntry {
   generated_at?: number;
 }
 
+interface ItaigiReferenceCandidate {
+  id?: string;
+  taigi: string;
+  tailo: string;
+  contributor?: string;
+  good?: number;
+  bad?: number;
+  score?: number;
+  audio_url?: string;
+  audio_available?: boolean;
+  source_url?: string;
+}
+
+interface ItaigiReferenceResult {
+  source: string;
+  query: string;
+  source_url: string;
+  api_url: string;
+  license_note?: string;
+  candidates: ItaigiReferenceCandidate[];
+}
+
 interface WordAsset {
   id: string;
   has_audio?: boolean;
   has_video?: boolean;
+  synthesis_text?: string;
+  synthesis_source?: string;
+  matches_current_reference?: boolean;
+  matches_current_word?: boolean;
   created_at?: number;
   generated_by_name?: string;
   generated_by_id?: string;
@@ -1521,6 +1693,18 @@ interface StatsSummary {
   word_queries_total: number;
   page_visits_total?: number;
   page_visits_today?: number;
+  job_quality?: {
+    completed_total: number;
+    reviewed_total: number;
+    problem_count: number;
+    chinese_voice_not_taigi_count?: number;
+    ok_count: number;
+    unreviewed_count: number;
+    problem_rate: number;
+    ok_rate: number;
+    reviewed_rate: number;
+    unreviewed_rate: number;
+  };
   lexicon_quality?: {
     word_entries_total: number;
     word_entries_rated: number;
@@ -1532,6 +1716,12 @@ interface StatsSummary {
     word_asset_rating_buckets?: RatingBuckets;
     word_problem_count: number;
     word_problem_rate: number;
+    word_token_reviewed_entries?: number;
+    word_token_problem_entries?: number;
+    word_token_problem_count?: number;
+    word_token_ok_count?: number;
+    segment_token_problem_count?: number;
+    segment_token_ok_count?: number;
     word_regeneration_requests: number;
     word_regeneration_complete: number;
     word_regeneration_queued: number;
@@ -1543,6 +1733,11 @@ interface StatsSummary {
     word_queries_total: number;
     word_assets_with_audio: number;
     word_assets_with_video: number;
+    audio_review_requests?: number;
+    audio_review_complete?: number;
+    audio_review_queued?: number;
+    audio_review_running?: number;
+    audio_review_failed?: number;
   };
   actions?: Record<string, number>;
   source_exports?: {
@@ -1648,6 +1843,7 @@ function jobKindLabel(job: Job, t: (key: string) => string) {
   if (job.kind === 'word_asset') return t('jobKindWord');
   if (job.kind === 'segment_regeneration') return '重生分段';
   if (job.kind === 'maintenance') return '維護清理';
+  if (job.kind === 'audio_review') return '音訊校對';
   return t('jobKindScript');
 }
 
@@ -1655,6 +1851,7 @@ function jobKindColor(job: Job) {
   if (job.kind === 'word_asset') return 'purple';
   if (job.kind === 'segment_regeneration') return 'magenta';
   if (job.kind === 'maintenance') return 'geekblue';
+  if (job.kind === 'audio_review') return 'cyan';
   return 'cyan';
 }
 
@@ -1708,7 +1905,13 @@ const exampleTexts = [
 ];
 
 function validPageTab(value: string | null) {
-  return value === 'work' || value === 'jobs' || value === 'lexicon' || value === 'stats' || value === 'sources' || value === 'about';
+  return value === 'work'
+    || value === 'jobs'
+    || value === 'lexicon'
+    || value === 'stats'
+    || value === 'sources'
+    || value === 'about'
+    || value === 'preferences';
 }
 
 function initialPageTab() {
@@ -1744,6 +1947,10 @@ function mediaUrl(target: string) {
   return url.toString();
 }
 
+function itaigiSearchUrl(query: string) {
+  return `https://itaigi.tw/k/${encodeURIComponent(query.trim())}`;
+}
+
 async function loadStaticSnapshot<T>(path: string) {
   const res = await axios.get<T>(`${STATIC_DATA_BASE}/${path.replace(/^\//, '')}`, { timeout: 10000 });
   return res.data;
@@ -1761,8 +1968,10 @@ function App() {
   const [jobSearch, setJobSearch] = useState('');
   const [completedJobSort, setCompletedJobSort] = useState<CompletedJobSort>('newest');
   const [completedJobKindFilter, setCompletedJobKindFilter] = useState<JobKindFilter>('all');
+  const [completedJobContentFilter, setCompletedJobContentFilter] = useState<CompletedJobContentFilter>('all');
   const [completedJobRatingFilter, setCompletedJobRatingFilter] = useState<CompletedJobRatingFilter>('all');
   const [completedJobMediaFilter, setCompletedJobMediaFilter] = useState<CompletedJobMediaFilter>('all');
+  const [completedJobIssueFilter, setCompletedJobIssueFilter] = useState<CompletedJobIssueFilter>('all');
   const [showQueuedJobs, setShowQueuedJobs] = useState(false);
   const [words, setWords] = useState<WordEntry[]>([]);
   const [wordQuery, setWordQuery] = useState('');
@@ -1773,6 +1982,9 @@ function App() {
   const [wordStatusFilter, setWordStatusFilter] = useState<WordStatusFilter>('all');
   const [expandedWordIds, setExpandedWordIds] = useState<Record<string, boolean>>({});
   const [selectedWordTokens, setSelectedWordTokens] = useState<Record<string, string[]>>({});
+  const [itaigiReferences, setItaigiReferences] = useState<Record<string, ItaigiReferenceResult>>({});
+  const [loadingItaigiReferences, setLoadingItaigiReferences] = useState<Record<string, boolean>>({});
+  const [applyingItaigiReferences, setApplyingItaigiReferences] = useState<Record<string, boolean>>({});
   const wordQueryRef = useRef('');
   const [uiLanguage, setUiLanguage] = useState<UiLanguage>(initialUiLanguage);
   const [dateTimeFormat, setDateTimeFormat] = useState<DateTimeFormatPreference>(initialDateTimeFormat);
@@ -1783,23 +1995,33 @@ function App() {
   const [feedbackDrafts, setFeedbackDrafts] = useState<Record<number, SegmentReviewPayload>>({});
   const [selectedSegmentTokens, setSelectedSegmentTokens] = useState<Record<number, string[]>>({});
   const [regeneratingSegments, setRegeneratingSegments] = useState<Record<number, boolean>>({});
+  const [segmentSynthesisSources, setSegmentSynthesisSources] = useState<Record<number, SynthesisSource>>({});
+  const [wordSynthesisSources, setWordSynthesisSources] = useState<Record<string, SynthesisSource>>({});
   const [jobError, setJobError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [generatingSentence, setGeneratingSentence] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [regeneratingReviewed, setRegeneratingReviewed] = useState(false);
+  const [reviewingAudio, setReviewingAudio] = useState(false);
   const [retryingJobs, setRetryingJobs] = useState<Record<string, boolean>>({});
+  const [fullRegeneratingJobs, setFullRegeneratingJobs] = useState<Record<string, boolean>>({});
   const [exportingPostgres, setExportingPostgres] = useState(false);
   const [postgresExportResult, setPostgresExportResult] = useState<PostgresExportResult | null>(null);
   const [syncingStatic, setSyncingStatic] = useState(false);
   const [staticSyncResult, setStaticSyncResult] = useState<StaticSyncResult | null>(null);
+  const [termSearch, setTermSearch] = useState('美元');
+  const [termReplacement, setTermReplacement] = useState('美金');
+  const [termBatchResult, setTermBatchResult] = useState<TermBatchRegenerateResult | null>(null);
+  const [runningTermBatch, setRunningTermBatch] = useState(false);
   const [loadingJobs, setLoadingJobs] = useState(false);
+  const [jobsLoaded, setJobsLoaded] = useState(false);
   const [requestingSourceExport, setRequestingSourceExport] = useState(false);
   const [sourceRequestWord, setSourceRequestWord] = useState('');
   const [sourceRequestNote, setSourceRequestNote] = useState('');
   const [readOnlyMode, setReadOnlyMode] = useState(false);
   const [nowSeconds, setNowSeconds] = useState(() => Date.now() / 1000);
   const [form] = Form.useForm<FormValues>();
+  const detachedAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const selectedJob = useMemo(
     () => jobs.find((job) => job.id === selectedJobId) ?? null,
@@ -1843,6 +2065,14 @@ function App() {
   const formatRatingText = (average?: number | null, count?: number) => (
     count ? `${t('ratingLabel')} ${average?.toFixed(1)} / 5（${count} ${t('voteUnit')}）` : ''
   );
+  const formatPercent = (value?: number | null) => `${Math.round((value || 0) * 100)}%`;
+  const problemTypeLabel = (problemType?: string) => (
+    problemType === 'chinese_voice_not_taigi' ? '中文語音未轉台語' : ''
+  );
+  const ProblemTypeTag = ({ problemType }: { problemType?: string }) => {
+    const label = problemTypeLabel(problemType);
+    return label ? <Tag color="volcano" className="issue-type-tag">{label}</Tag> : null;
+  };
   const formatJobMeta = (job: Job) => ([
     `${job.segment_count || 0} ${t('segmentUnit')}`,
     `${t('createdLabel')} ${formatDateTime(job.created_at)}`,
@@ -1850,6 +2080,24 @@ function App() {
     formatRatingText(job.rating_average, job.rating_count),
   ].filter(Boolean).join(' · '));
   const jobDisplayTitle = (job: Job) => (job.kind === 'segment_regeneration' ? job.title : firstSentence(job.chinese_text) || job.title);
+  const isLongArticleJob = (job: Job) => (
+    job.kind === 'script'
+    && ((job.segment_count ?? 0) > 1 || inlineText(job.chinese_text || job.taigi_text || job.title).length >= 120)
+  );
+  const isShortWordAudioJob = (job: Job) => job.kind === 'word_asset';
+  const jobMatchesContentFilter = (job: Job, filter: CompletedJobContentFilter) => {
+    if (filter === 'long_article') return isLongArticleJob(job);
+    if (filter === 'short_word_audio') return isShortWordAudioJob(job);
+    return true;
+  };
+  const jobMarkedOk = (job: Job) => !job.problem && !!job.problem_reported_at;
+  const jobMatchesIssueFilter = (job: Job, filter: CompletedJobIssueFilter) => {
+    if (filter === 'problem') return !!job.problem;
+    if (filter === 'chinese_voice_not_taigi') return job.problem_type === 'chinese_voice_not_taigi';
+    if (filter === 'ok') return jobMarkedOk(job);
+    if (filter === 'unreviewed') return !job.problem && !job.problem_reported_at;
+    return true;
+  };
   const newestFirst = (a: Job, b: Job) => (b.created_at || b.updated_at || 0) - (a.created_at || a.updated_at || 0);
   const highestRatedFirst = (a: Job, b: Job) => {
     const ratingDelta = (b.rating_average || 0) - (a.rating_average || 0);
@@ -1877,6 +2125,8 @@ function App() {
       job.tailo_text,
       job.stage,
       job.error ?? '',
+      problemTypeLabel(job.problem_type),
+      job.problem_reason ?? '',
       jobKindLabel(job, t),
       job.status,
     ].some((value) => String(value || '').toLowerCase().includes(cleaned));
@@ -1886,6 +2136,8 @@ function App() {
       if (job.status !== 'complete') return false;
       if (!jobMatchesSearch(job, jobSearch)) return false;
       if (completedJobKindFilter !== 'all' && job.kind !== completedJobKindFilter) return false;
+      if (!jobMatchesContentFilter(job, completedJobContentFilter)) return false;
+      if (!jobMatchesIssueFilter(job, completedJobIssueFilter)) return false;
       if (completedJobRatingFilter === 'rated' && !(job.rating_count && job.rating_count > 0)) return false;
       if (completedJobRatingFilter === 'unrated' && (job.rating_count && job.rating_count > 0)) return false;
       if (completedJobMediaFilter === 'video' && !job.video_path) return false;
@@ -1900,13 +2152,18 @@ function App() {
       if (completedJobSort === 'title') return jobDisplayTitle(a).localeCompare(jobDisplayTitle(b), 'zh-Hant') || newestFirst(a, b);
       return newestFirst(a, b);
     });
-  }, [jobs, jobSearch, completedJobKindFilter, completedJobRatingFilter, completedJobMediaFilter, completedJobSort]);
+  }, [jobs, jobSearch, completedJobKindFilter, completedJobContentFilter, completedJobIssueFilter, completedJobRatingFilter, completedJobMediaFilter, completedJobSort]);
   const jobGroups = useMemo(() => ([
     { key: 'running', label: '處理中', jobs: jobs.filter((job) => job.status === 'running').sort(newestFirst) },
     { key: 'queued', label: '隊列中', jobs: jobs.filter((job) => job.status === 'queued').sort(newestFirst), collapsed: !showQueuedJobs },
     { key: 'complete', label: '已完成', jobs: completedJobs },
-    { key: 'failed', label: '失敗', jobs: jobs.filter((job) => job.status === 'failed' && jobMatchesSearch(job, jobSearch)).sort(newestFirst) },
-  ]), [jobs, completedJobs, jobSearch, showQueuedJobs]);
+    { key: 'failed', label: '失敗', jobs: jobs.filter((job) => job.status === 'failed' && jobMatchesSearch(job, jobSearch) && jobMatchesContentFilter(job, completedJobContentFilter)).sort(newestFirst) },
+  ]), [jobs, completedJobs, jobSearch, completedJobContentFilter, showQueuedJobs]);
+  const featuredJobs = useMemo(() => (
+    jobs
+      .filter((job) => job.status === 'complete' && !!job.featured_at)
+      .sort((a, b) => (b.featured_at || 0) - (a.featured_at || 0))
+  ), [jobs]);
   const normalizedWordQuery = wordQuery.trim().replace(/\s+/g, '').toLowerCase();
   const wordHasExactMatch = !!normalizedWordQuery && words.some((word) => (
     word.source.trim().replace(/\s+/g, '').toLowerCase() === normalizedWordQuery
@@ -1919,8 +2176,9 @@ function App() {
       if (wordMediaFilter === 'audio' && !(word.has_audio || (word.assets ?? []).some((asset) => asset.has_audio))) return false;
       if (wordMediaFilter === 'video' && !(word.has_video || (word.assets ?? []).some((asset) => asset.has_video))) return false;
       if (wordMediaFilter === 'missing_audio' && (word.has_audio || (word.assets ?? []).some((asset) => asset.has_audio))) return false;
-      if (wordStatusFilter === 'problem' && !word.problem) return false;
-      if (wordStatusFilter === 'ok' && word.problem) return false;
+      const hasTokenProblem = (word.token_problem_count ?? 0) > 0;
+      if (wordStatusFilter === 'problem' && !word.problem && !hasTokenProblem) return false;
+      if (wordStatusFilter === 'ok' && (word.problem || hasTokenProblem)) return false;
       if (wordStatusFilter === 'generating' && !['queued', 'running'].includes(word.generation_status || '')) return false;
       if (wordStatusFilter === 'requested' && word.status !== 'requested') return false;
       return true;
@@ -1942,11 +2200,28 @@ function App() {
   const jobMediaSrc = (job: Job, kind: 'audio' | 'video' | 'zip' | 'taigi' | 'tailo' | 'segments') => (
     job.static_media?.[kind] || `/jobs/${job.id}/download/${kind}`
   );
+  const jobDownloadSrc = (job: Job, kind: 'audio' | 'video' | 'zip' | 'taigi' | 'tailo' | 'segments') => (
+    `/jobs/${job.id}/download/${kind}`
+  );
   const wordAssetMediaSrc = (word: WordEntry, asset: WordAsset, kind: 'audio' | 'video') => (
     word.static_media?.assets?.[asset.id]?.[kind]
     || (asset.id === 'legacy' ? word.static_media?.[kind] : undefined)
-    || `/words/${word.id}/assets/${asset.id}/download/${kind}`
+    || `/words/${word.id}/assets/${asset.id}/media/${kind}`
   );
+  const wordAssetDownloadSrc = (word: WordEntry, asset: WordAsset, kind: 'audio' | 'video') => (
+    `/words/${word.id}/assets/${asset.id}/download/${kind}`
+  );
+  const pauseOtherMedia = (current?: HTMLMediaElement | null) => {
+    const detachedAudio = detachedAudioRef.current;
+    if (detachedAudio && detachedAudio !== current && !detachedAudio.paused) {
+      detachedAudio.pause();
+    }
+    document.querySelectorAll<HTMLMediaElement>('audio, video').forEach((media) => {
+      if (media !== current && !media.paused) {
+        media.pause();
+      }
+    });
+  };
   const primaryWordAsset = (word: WordEntry) => (
     (word.assets ?? []).find((asset) => asset.has_audio) ?? (word.assets ?? [])[0] ?? null
   );
@@ -1958,6 +2233,8 @@ function App() {
     }
     const url = wordAssetMediaSrc(word, asset, 'audio');
     const audio = new Audio(url);
+    pauseOtherMedia(audio);
+    detachedAudioRef.current = audio;
     audio.play().catch(() => window.open(url, '_blank', 'noopener,noreferrer'));
   };
   const toggleWordDetails = (wordId: string) => {
@@ -1974,9 +2251,17 @@ function App() {
       : `/jobs/${job.id}/segments/${segmentIndex}/audio`;
     return versionedUrl(url, version);
   };
+  const segmentAudioDownloadSrc = (job: Job, segment: Segment | number) => {
+    const segmentIndex = typeof segment === 'number' ? segment : segment.index;
+    const version = typeof segment === 'number' ? undefined : segment.regenerated_at;
+    return versionedUrl(`/jobs/${job.id}/segments/${segmentIndex}/audio`, version);
+  };
 
   const loadAuth = async () => {
     const res = await axios.get<AuthStatus>('/auth/status');
+    if (!res.data.authenticated) {
+      setAuthSessionToken(null);
+    }
     setAuth(res.data);
   };
 
@@ -1995,7 +2280,7 @@ function App() {
       setSelectedJobId((current) => {
         if (nextJobs.length === 0) return null;
         if (current && nextJobs.some((job) => job.id === current)) return current;
-        return nextJobs[0].id;
+        return nextJobs.find((job) => job.status === 'complete' && !!job.featured_at)?.id ?? nextJobs[0].id;
       });
     } catch (error) {
       const snapshot = await loadStaticSnapshot<{ jobs: Job[] }>('jobs/index.json');
@@ -2005,9 +2290,10 @@ function App() {
       setSelectedJobId((current) => {
         if (nextJobs.length === 0) return null;
         if (current && nextJobs.some((job) => job.id === current)) return current;
-        return nextJobs[0].id;
+        return nextJobs.find((job) => job.status === 'complete' && !!job.featured_at)?.id ?? nextJobs[0].id;
       });
     } finally {
+      setJobsLoaded(true);
       setLoadingJobs(false);
     }
   };
@@ -2086,6 +2372,15 @@ function App() {
     setAdminSettings(res.data);
   };
 
+  const jumpToCreateJob = () => {
+    if (activeTab !== 'work') {
+      changeActiveTab('work');
+    }
+    window.setTimeout(() => {
+      document.getElementById('create-job-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 80);
+  };
+
   const changeActiveTab = (nextTab: string) => {
     if (!validPageTab(nextTab)) return;
     setActiveTab(nextTab);
@@ -2146,6 +2441,21 @@ function App() {
   };
 
   useEffect(() => {
+    const handleMediaPlay = (event: Event) => {
+      const target = event.target;
+      if (target instanceof HTMLMediaElement) {
+        pauseOtherMedia(target);
+      }
+    };
+    document.addEventListener('play', handleMediaPlay, true);
+    return () => {
+      document.removeEventListener('play', handleMediaPlay, true);
+      detachedAudioRef.current?.pause();
+      detachedAudioRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!window.sessionStorage.getItem('taigi_page_visit_recorded')) {
       window.sessionStorage.setItem('taigi_page_visit_recorded', '1');
       axios.post('/stats/action', {
@@ -2158,13 +2468,17 @@ function App() {
     const params = new URLSearchParams(window.location.search);
     const loginToken = params.get('token');
     if (loginToken) {
-      axios.post('/auth/verify', { token: loginToken })
-        .then(async () => {
+      axios.post<VerifyAuthResponse>('/auth/verify', { token: loginToken })
+        .then(async (res) => {
+          if (res.data.session_token) {
+            setAuthSessionToken(res.data.session_token);
+          }
           window.history.replaceState({}, document.title, window.location.pathname);
           await loadAuth();
           message.success('已登入');
         })
         .catch(() => {
+          setAuthSessionToken(null);
           window.history.replaceState({}, document.title, window.location.pathname);
           setAuth({ authenticated: false, is_admin: false, email: null, token_required: true, loopback_only: false });
           message.error('登入連結無效或已過期');
@@ -2241,7 +2555,12 @@ function App() {
       return;
     }
     try {
-      await axios.post('/auth/magic-link', { email: loginEmail });
+      const res = await axios.post<{ ok: boolean; delivered: boolean }>('/auth/magic-link', { email: loginEmail });
+      if (!res.data.delivered) {
+        setMagicLinkSent(false);
+        message.error('登入連結沒有寄出，請檢查 SMTP 設定或服務日誌。');
+        return;
+      }
       setMagicLinkSent(true);
       message.success('登入連結已寄出');
     } catch (error) {
@@ -2252,7 +2571,9 @@ function App() {
 
   const logout = async () => {
       await axios.post('/auth/logout');
+      setAuthSessionToken(null);
       setJobs([]);
+      setJobsLoaded(false);
       setAdminSettings(null);
       setSelectedJobId(null);
       await loadAuth();
@@ -2446,7 +2767,75 @@ function App() {
     }
   };
 
+  const regenerateFullJob = async (job: Job) => {
+    setFullRegeneratingJobs((current) => ({ ...current, [job.id]: true }));
+    setJobError(null);
+    try {
+      const res = await axios.post<Job>(`/jobs/${job.id}/regenerate-full`, {}, { timeout: 60000 });
+      setJobs((current) => (current.some((item) => item.id === res.data.id) ? current : [res.data, ...current]));
+      setSelectedJobId(res.data.id);
+      setActiveTab('work');
+      await loadJobs().catch(() => undefined);
+      await loadQueueStatus().catch(() => undefined);
+      await loadStats().catch(() => undefined);
+      message.success('已建立整篇重新生成工作');
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      const reason = detail && typeof detail === 'object'
+        ? detail.message || '整篇重新生成失敗。'
+        : detail || '整篇重新生成失敗。';
+      setJobError(String(reason));
+      message.error(String(reason));
+    } finally {
+      setFullRegeneratingJobs((current) => ({ ...current, [job.id]: false }));
+    }
+  };
+
+  const runTermBatchRegeneration = async (dryRun: boolean) => {
+    if (!termSearch.trim() || !termReplacement.trim()) {
+      message.warning('請輸入搜尋詞和台語替換詞');
+      return;
+    }
+    setRunningTermBatch(true);
+    try {
+      const res = await axios.post<TermBatchRegenerateResult>(
+        '/admin/tools/term-regenerate',
+        {
+          search_term: termSearch.trim(),
+          taigi_replacement: termReplacement.trim(),
+          dry_run: dryRun,
+          max_jobs: 200,
+        },
+        { timeout: 60000 },
+      );
+      setTermBatchResult(res.data);
+      if (!dryRun && res.data.queued_jobs.length) {
+        setJobs((current) => {
+          const existing = new Set(current.map((job) => job.id));
+          return [...res.data.queued_jobs.filter((job) => !existing.has(job.id)), ...current];
+        });
+        await loadJobs().catch(() => undefined);
+        await loadQueueStatus().catch(() => undefined);
+        await loadStats().catch(() => undefined);
+      }
+      message.success(dryRun
+        ? `找到 ${res.data.match_count} 個相關分段，其中 ${res.data.regeneratable_count} 個可重生`
+        : `已排入 ${res.data.queued_jobs.length} 筆批次重生工作`);
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      const reason = detail && typeof detail === 'object'
+        ? detail.message || '批次搜尋重生失敗。'
+        : detail || '批次搜尋重生失敗。';
+      message.error(String(reason));
+    } finally {
+      setRunningTermBatch(false);
+    }
+  };
+
   const selectedText = () => window.getSelection()?.toString().trim() ?? '';
+  const synthesisSourceLabel = (source?: string) => (
+    source === 'tailo' || source === 'corrected_tailo' ? '用台羅生成' : '用台語文字生成'
+  );
 
   const updateFeedback = (segmentIndex: number, patch: Partial<SegmentReviewPayload>) => {
     setFeedbackDrafts((current) => ({
@@ -2579,6 +2968,7 @@ function App() {
         tokens: tokens.map((token) => ({ source: token.source, status })),
       });
       await loadWords(wordQueryRef.current);
+      await loadStats().catch(() => undefined);
       clearWordTokenSelection(word.id);
       message.success(`已把 ${tokens.length} 個詞標示為${status === 'problem' ? '有問題' : '沒問題'}`);
     } catch (error) {
@@ -2662,7 +3052,7 @@ function App() {
     const wordId = token.word_id || (await createTokenWord(token))?.id;
     if (!wordId) return;
     try {
-      await axios.post(`/words/${wordId}/generate`, {}, { timeout: 30000 });
+      await axios.post(`/words/${wordId}/generate`, { synthesis_source: 'taigi' }, { timeout: 30000 });
       await loadWords(wordQueryRef.current).catch(() => undefined);
       await loadJobs().catch(() => undefined);
       await loadStats().catch(() => undefined);
@@ -2778,7 +3168,10 @@ function App() {
     try {
       const res = await axios.post<{ queued: boolean; job: Job; source_job: Job; segment_index: number }>(
         `/jobs/${sourceJobId}/segments/${segment.index}/regenerate`,
-        segmentFeedbackBody(draft),
+        {
+          ...segmentFeedbackBody(draft),
+          synthesis_source: segmentSynthesisSources[segment.index] ?? 'taigi',
+        },
         { timeout: 60000 },
       );
       setJobs((current) => {
@@ -2833,24 +3226,67 @@ function App() {
     }
   };
 
+  const queueAudioReview = async (generateMms = false) => {
+    if (!selectedJob) return;
+    setReviewingAudio(true);
+    setJobError(null);
+    try {
+      const res = await axios.post<{ queued: boolean; job: Job; source_job: Job }>(
+        `/jobs/${selectedJob.id}/audio-review`,
+        { run_asr: true, generate_mms: generateMms },
+        { timeout: 60000 },
+      );
+      setJobs((current) => {
+        const patched = current.map((job) => (job.id === res.data.source_job.id ? { ...job, ...res.data.source_job } : job));
+        return patched.some((job) => job.id === res.data.job.id) ? patched : [res.data.job, ...patched];
+      });
+      setSelectedJobId(res.data.job.id);
+      await loadJobs().catch(() => undefined);
+      await loadQueueStatus().catch(() => undefined);
+      await loadStats().catch(() => undefined);
+      message.success(generateMms ? '已排入音訊校對與 MMS 對照工作' : '已排入音訊校對工作');
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      const reason = detail && typeof detail === 'object'
+        ? detail.message || '音訊校對排程失敗。'
+        : detail || '音訊校對排程失敗。';
+      setJobError(String(reason));
+      message.error(String(reason));
+    } finally {
+      setReviewingAudio(false);
+    }
+  };
+
   const regenerateFromCorrections = async () => {
     if (!selectedJob) return;
     setRegenerating(true);
     setJobError(null);
     try {
-      const res = await axios.post<Job>(`/jobs/${selectedJob.id}/regenerate`, {}, { timeout: 60000 });
-      setSelectedJobId(res.data.id);
+      if (selectedJob.kind === 'word_asset') {
+        const wordId = typeof selectedJob.metadata?.word_id === 'string' ? selectedJob.metadata.word_id : '';
+        if (!wordId) {
+          throw new Error('這筆詞語語音工作缺少詞語資訊，無法重新產生。');
+        }
+        const res = await axios.post<{ job?: Job }>(`/words/${wordId}/generate`, { synthesis_source: 'taigi' }, { timeout: 30000 });
+        if (res.data.job?.id) {
+          setSelectedJobId(res.data.job.id);
+        }
+        message.success('已排入詞語語音重新產生佇列');
+      } else {
+        const res = await axios.post<Job>(`/jobs/${selectedJob.id}/regenerate`, {}, { timeout: 60000 });
+        setSelectedJobId(res.data.id);
+        message.success('已用修正後資料建立新的生成工作');
+      }
       await loadJobs();
       await loadQueueStatus().catch(() => undefined);
       await loadWords().catch(() => undefined);
       await loadStats().catch(() => undefined);
-      message.success('已用修正後資料建立新的生成工作');
     } catch (error) {
       const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
       const status = axios.isAxiosError(error) ? error.response?.status : null;
       const reason = detail && typeof detail === 'object'
         ? detail.message || '後端拒絕重新生成。'
-        : detail || '重新生成失敗。';
+        : detail || (error instanceof Error ? error.message : '重新生成失敗。');
       const fullReason = `重新生成失敗：${reason}${status ? `（HTTP ${status}）` : ''}`;
       setJobError(fullReason);
       message.error(fullReason);
@@ -2859,11 +3295,14 @@ function App() {
     }
   };
 
-  const reportWordIssue = async (word: WordEntry) => {
+  const reportWordIssue = async (word: WordEntry, issueType: ProblemType = '') => {
     try {
-      await axios.post(`/words/${word.id}/issue`, { reason: '使用者回報詞語素材有問題，需要重新產生。' });
+      const reason = issueType === 'chinese_voice_not_taigi'
+        ? '這個詞語音訊聽起來是中文語音，沒有成功轉成台語，需要重新產生。'
+        : '使用者回報詞語素材有問題，需要重新產生。';
+      await axios.post(`/words/${word.id}/issue`, { reason, issue_type: issueType });
       await loadWords();
-      message.success('已標記這個詞語素材需要重新產生');
+      message.success(issueType === 'chinese_voice_not_taigi' ? '已標示為中文語音未轉台語' : '已標記這個詞語素材需要重新產生');
     } catch (error) {
       const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
       message.error((detail && typeof detail === 'object' ? detail.message : detail) || '無法標記詞語問題');
@@ -2886,6 +3325,37 @@ function App() {
     } catch (error) {
       const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
       message.error((detail && typeof detail === 'object' ? detail.message : detail) || detail || '無法評分');
+    }
+  };
+
+  const markJobIssue = async (job: Job, status: 'problem' | 'ok', issueType: ProblemType = '') => {
+    try {
+      const reason = status === 'problem'
+        ? issueType === 'chinese_voice_not_taigi'
+          ? '使用者標示這個工作成果是中文語音，沒有成功轉成台語，需要檢查。'
+          : '使用者標示這個工作成果有問題，需要檢查。'
+        : '使用者標示這個工作成果沒有問題。';
+      await axios.post(`/jobs/${job.id}/issue`, { status, reason, issue_type: issueType });
+      await loadJobs();
+      await loadStats().catch(() => undefined);
+      message.success(status === 'problem' ? (issueType === 'chinese_voice_not_taigi' ? '已標示為中文語音未轉台語' : '已標示這個工作成果有問題') : '已標示這個工作成果沒問題');
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      message.error((detail && typeof detail === 'object' ? detail.message : detail) || detail || '無法更新工作成果狀態');
+    }
+  };
+
+  const setJobFeatured = async (job: Job, featured: boolean) => {
+    try {
+      await axios.post(`/jobs/${job.id}/featured`, {
+        featured,
+        note: featured ? '首頁示範影片' : '',
+      });
+      await loadJobs();
+      message.success(featured ? '已加入首頁精選' : '已取消首頁精選');
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      message.error((detail && typeof detail === 'object' ? detail.message : detail) || detail || '無法更新首頁精選');
     }
   };
 
@@ -2919,16 +3389,64 @@ function App() {
     }
   };
 
-  const generateWordAudio = async (word: WordEntry) => {
+  const generateWordAudio = async (word: WordEntry, synthesisSource?: SynthesisSource) => {
+    const selectedSource = synthesisSource ?? wordSynthesisSources[word.id] ?? 'taigi';
     try {
-      await axios.post(`/words/${word.id}/generate`, {}, { timeout: 30000 });
+      await axios.post(`/words/${word.id}/generate`, { synthesis_source: selectedSource }, { timeout: 30000 });
       await loadWords();
       await loadJobs();
       await loadStats().catch(() => undefined);
-      message.success('已排入詞語語音重新產生佇列');
+      message.success(`已排入詞語語音重新產生佇列：${synthesisSourceLabel(selectedSource)}`);
     } catch (error) {
       const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
       message.error((detail && typeof detail === 'object' ? detail.message : detail) || '無法產生詞語語音');
+    }
+  };
+
+  const loadItaigiReference = async (word: WordEntry) => {
+    setLoadingItaigiReferences((current) => ({ ...current, [word.id]: true }));
+    try {
+      const res = await axios.get<ItaigiReferenceResult>(`/words/${word.id}/itaigi-reference`, { timeout: 30000 });
+      setItaigiReferences((current) => ({ ...current, [word.id]: res.data }));
+      if (res.data.candidates.length === 0) {
+        message.info('iTaigi 目前沒有查到可參考的語料。');
+      }
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      message.error((detail && typeof detail === 'object' ? detail.message : detail) || '無法查詢 iTaigi 參考資料');
+    } finally {
+      setLoadingItaigiReferences((current) => ({ ...current, [word.id]: false }));
+    }
+  };
+
+  const applyItaigiReference = async (word: WordEntry, candidate: ItaigiReferenceCandidate) => {
+    const key = `${word.id}:${candidate.id || candidate.tailo}`;
+    setApplyingItaigiReferences((current) => ({ ...current, [key]: true }));
+    try {
+      const res = await axios.post<{ job?: Job }>(
+        `/words/${word.id}/itaigi-reference/apply`,
+        {
+          taigi: candidate.taigi,
+          tailo: candidate.tailo,
+          audio_url: candidate.audio_url ?? '',
+          source_url: candidate.source_url ?? itaigiSearchUrl(word.source),
+          good: candidate.good ?? 0,
+          bad: candidate.bad ?? 0,
+        },
+        { timeout: 30000 },
+      );
+      if (res.data.job?.id) {
+        setSelectedJobId(res.data.job.id);
+      }
+      await loadWords();
+      await loadJobs();
+      await loadStats().catch(() => undefined);
+      message.success('已套用 iTaigi 參考資料並排入重新產生');
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      message.error((detail && typeof detail === 'object' ? detail.message : detail) || '無法套用 iTaigi 參考資料');
+    } finally {
+      setApplyingItaigiReferences((current) => ({ ...current, [key]: false }));
     }
   };
 
@@ -3058,6 +3576,7 @@ function App() {
               { key: 'stats', label: t('stats') },
               { key: 'sources', label: t('sources') },
               { key: 'about', label: t('about') },
+              { key: 'preferences', label: t('preferences') },
             ].map((item) => (
               <button
                 key={item.key}
@@ -3070,26 +3589,6 @@ function App() {
             ))}
           </nav>
           <Space className="top-actions" size={8}>
-            <Select
-              size="small"
-              value={uiLanguage}
-              options={UI_LANGUAGES}
-              onChange={changeUiLanguage}
-              className="language-select"
-            />
-            <Select<DateTimeFormatPreference>
-              size="small"
-              aria-label={t('dateTimeFormat')}
-              value={dateTimeFormat}
-              onChange={changeDateTimeFormat}
-              className="time-format-select"
-              options={[
-                { value: 'system', label: t('dateSystem') },
-                { value: 'taiwan', label: t('dateTaiwan') },
-                { value: 'us', label: t('dateUs') },
-                { value: 'iso', label: t('dateIso') },
-              ]}
-            />
             {signedIn ? (
               <>
                 <Tag color={isAdmin ? 'success' : 'blue'}>{isAdmin ? t('admin') : t('user')}</Tag>
@@ -3119,7 +3618,7 @@ function App() {
 
         <Content className="app-content">
             <div className={`app-grid ${
-              activeTab === 'lexicon' ? 'show-lexicon' : activeTab === 'jobs' ? 'show-jobs' : activeTab === 'stats' ? 'show-stats' : activeTab === 'sources' ? 'show-sources' : activeTab === 'about' ? 'show-about' : 'show-work'
+              activeTab === 'lexicon' ? 'show-lexicon' : activeTab === 'jobs' ? 'show-jobs' : activeTab === 'stats' ? 'show-stats' : activeTab === 'sources' ? 'show-sources' : activeTab === 'about' ? 'show-about' : activeTab === 'preferences' ? 'show-preferences' : 'show-work'
             }`}>
               <Space direction="vertical" size={16} style={{ width: '100%' }}>
                 {readOnlyMode && (
@@ -3130,7 +3629,7 @@ function App() {
                     description="後端 API 暫時無法連線時，頁面會改讀已匯出的 S3/R2 相容靜態 snapshot；已完成內容仍可瀏覽與播放，但建立工作、登入、評分與申請功能需要後端恢復。"
                   />
                 )}
-                <Card className="create-job-card">
+                <Card id="create-job-card" className="create-job-card">
                   <div className="card-title">
                     <Title level={3}>{t('createTitle')}</Title>
                     <Paragraph type="secondary">
@@ -3157,7 +3656,7 @@ function App() {
                             未登入使用者還要等待 <span className="stable-number">{formatStableWait(publicWaitSeconds)}</span> 才能再次生成
                           </>
                         )
-                        : '未登入使用者目前可以送出一句'}
+                        : '未登入使用者目前可以送出一段文章'}
                       description={
                         <Space direction="vertical" size={2}>
                           <Text>
@@ -3166,7 +3665,7 @@ function App() {
                           <Text type="secondary">
                             {queueStatus.private_client
                               ? <>內網送出的工作會優先處理；現在送出會排在第 <span className="stable-number">{queueStatus.queue.next_position}</span> 個。</>
-                              : <>現在送出會排在第 <span className="stable-number">{queueStatus.queue.next_position}</span> 個；未登入使用者每次限一句，間隔 <span className="stable-number">{formatWait(queueStatus.rate_limit.limit_seconds)}</span>。</>}
+                              : <>現在送出會排在第 <span className="stable-number">{queueStatus.queue.next_position}</span> 個；未登入使用者每次最多 <span className="stable-number">{queueStatus.rate_limit.max_chars ?? 1200}</span> 字，送出後需等待 <span className="stable-number">{formatWait(queueStatus.rate_limit.limit_seconds)}</span> 才能再次生成。</>}
                           </Text>
                         </Space>
                       }
@@ -3210,10 +3709,10 @@ function App() {
                       <Input prefix={<FileTextOutlined />} />
                     </Form.Item>
                     <Form.Item label="中文稿" name="chinese_text" rules={[{ required: true, message: '請輸入中文稿' }]}>
-                      <TextArea rows={3} className="textarea-mono" />
+                      <TextArea autoSize={{ minRows: 4, maxRows: 28 }} className="textarea-mono long-textarea" />
                     </Form.Item>
                     <Form.Item label="台語稿覆寫（可留空，系統會先自動翻成草稿）" name="taigi_override">
-                      <TextArea rows={3} className="textarea-mono" placeholder="人工校稿後的台語稿可貼佇遮" />
+                      <TextArea autoSize={{ minRows: 3, maxRows: 28 }} className="textarea-mono long-textarea" placeholder="人工校稿後的台語稿可貼佇遮" />
                     </Form.Item>
                     <Collapse
                       ghost
@@ -3297,14 +3796,54 @@ function App() {
                 </Card>
 
                 <Card className="current-job-card">
-                  <Flex align="center" justify="space-between" gap={12} className="card-title">
-                    <Title level={3} style={{ margin: 0 }}>目前工作</Title>
-                    {selectedJob && <Tag color={statusColor[selectedJob.status]}>{selectedJob.status}</Tag>}
+                  <Flex align="center" justify="space-between" gap={12} wrap className="card-title">
+                    <Space size={8} wrap>
+                      <Title level={3} style={{ margin: 0 }}>最新成果</Title>
+                      {selectedJob && <Tag color={statusColor[selectedJob.status]}>{selectedJob.status}</Tag>}
+                      {selectedJob?.featured_at && <Tag color="gold">首頁精選</Tag>}
+                      {selectedJob?.problem && <Tag color="error">成果有問題</Tag>}
+                      {selectedJob?.problem && <ProblemTypeTag problemType={selectedJob.problem_type} />}
+                    </Space>
+                    <Space size={8} wrap>
+                      {isAdmin && selectedJob?.status === 'complete' && (
+                        <Button onClick={() => setJobFeatured(selectedJob, !selectedJob.featured_at)}>
+                          {selectedJob.featured_at ? '取消精選' : '設為首頁精選'}
+                        </Button>
+                      )}
+                      <Button type="primary" icon={<SendOutlined />} onClick={jumpToCreateJob}>
+                        建立新工作
+                      </Button>
+                    </Space>
                   </Flex>
                   {!selectedJob ? (
-                    <Alert type="info" showIcon message="尚未建立工作" />
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="尚未建立工作"
+                      description={(
+                        <Button type="primary" icon={<SendOutlined />} onClick={jumpToCreateJob}>
+                          立即建立第一個台語語音影片
+                        </Button>
+                      )}
+                    />
                   ) : (
                     <Space direction="vertical" size={14} style={{ width: '100%' }}>
+                      <Alert
+                        type="info"
+                        showIcon
+                        className="create-job-shortcut"
+                        message="想產生新的台語語音影片？"
+                        description={(
+                          <Flex align="center" justify="space-between" gap={12} wrap>
+                            <Text type="secondary">
+                              先在這裡播放、評分或分享最新成果；要產生新稿時可直接跳到下方建立表單。
+                            </Text>
+                            <Button type="primary" icon={<SendOutlined />} onClick={jumpToCreateJob}>
+                              建立新工作
+                            </Button>
+                          </Flex>
+                        )}
+                      />
                       <div>
                         <Text strong>{jobDisplayTitle(selectedJob)}</Text>
                         <br />
@@ -3326,7 +3865,17 @@ function App() {
                                 </>
                               )}
                             </div>
-                            <Rate value={selectedJob.my_rating ?? 0} onChange={(rating) => rateJob(selectedJob, rating)} />
+                            <Space size={8} wrap>
+                              <Rate value={selectedJob.my_rating ?? 0} onChange={(rating) => rateJob(selectedJob, rating)} />
+                              <Button size="small" danger={selectedJob.problem} onClick={() => markJobIssue(selectedJob, selectedJob.problem ? 'ok' : 'problem')}>
+                                {selectedJob.problem ? '標示沒問題' : '標示成果有問題'}
+                              </Button>
+                              {selectedJob.problem_type !== 'chinese_voice_not_taigi' && (
+                                <Button size="small" danger onClick={() => markJobIssue(selectedJob, 'problem', 'chinese_voice_not_taigi')}>
+                                  中文語音未轉台語
+                                </Button>
+                              )}
+                            </Space>
                           </Flex>
                           <div>
                             <Text strong>音訊播放</Text>
@@ -3374,26 +3923,47 @@ function App() {
                       {selectedJob.status === 'complete' && (
                         <>
                           <div className="downloads">
-                            <Button type="primary" icon={<DownloadOutlined />} href={jobMediaSrc(selectedJob, 'zip')}>
+                            <Button type="primary" icon={<DownloadOutlined />} href={jobDownloadSrc(selectedJob, 'zip')}>
                               全部下載
                             </Button>
-                            <Button icon={<AudioOutlined />} href={jobMediaSrc(selectedJob, 'audio')}>音訊</Button>
+                            <Button icon={<AudioOutlined />} href={jobDownloadSrc(selectedJob, 'audio')}>音訊</Button>
                             {selectedJob.video_path && (
-                              <Button icon={<VideoCameraOutlined />} href={jobMediaSrc(selectedJob, 'video')}>影片</Button>
+                              <Button icon={<VideoCameraOutlined />} href={jobDownloadSrc(selectedJob, 'video')}>影片</Button>
                             )}
-                            <Button href={jobMediaSrc(selectedJob, 'taigi')}>台語稿</Button>
-                            <Button href={jobMediaSrc(selectedJob, 'tailo')}>台羅</Button>
-                            <Button href={jobMediaSrc(selectedJob, 'segments')}>分段 JSON</Button>
+                            <Button href={jobDownloadSrc(selectedJob, 'taigi')}>台語稿</Button>
+                            <Button href={jobDownloadSrc(selectedJob, 'tailo')}>台羅</Button>
+                            <Button href={jobDownloadSrc(selectedJob, 'segments')}>分段 JSON</Button>
                             <Button onClick={regenerateReviewedSegments} loading={regeneratingReviewed}>
                               重生已回饋段落
                             </Button>
+                            {selectedJob.kind !== 'word_asset' && selectedJob.kind !== 'audio_review' && (
+                              <>
+                                <Button onClick={() => queueAudioReview(false)} loading={reviewingAudio}>
+                                  音訊校對
+                                </Button>
+                                <Button onClick={() => queueAudioReview(true)} loading={reviewingAudio}>
+                                  校對 + MMS 對照
+                                </Button>
+                              </>
+                            )}
                             <Button onClick={regenerateFromCorrections} loading={regenerating}>
-                              用修正稿重新生成
+                              {selectedJob.kind === 'word_asset' ? '產生新的詞語語音版本' : '用修正稿重新生成'}
                             </Button>
                             {isAdmin && (
-                              <Button danger icon={<DeleteOutlined />} onClick={() => deleteJob(selectedJob)}>
-                                刪除
-                              </Button>
+                              <>
+                                {selectedJob.kind === 'script' && (
+                                  <Button
+                                    icon={<ReloadOutlined />}
+                                    loading={!!fullRegeneratingJobs[selectedJob.id]}
+                                    onClick={() => regenerateFullJob(selectedJob)}
+                                  >
+                                    整篇重新生成
+                                  </Button>
+                                )}
+                                <Button danger icon={<DeleteOutlined />} onClick={() => deleteJob(selectedJob)}>
+                                  刪除
+                                </Button>
+                              </>
                             )}
                           </div>
                           <Divider />
@@ -3411,6 +3981,11 @@ function App() {
                                       <Space>
                                         <Tag color="blue">Segment {segment.index}</Tag>
                                         {segment.duration && <Text type="secondary">{segment.duration.toFixed(2)}s</Text>}
+                                        {segment.last_synthesis_source && (
+                                          <Tag color={segment.last_synthesis_source.includes('tailo') ? 'cyan' : 'default'}>
+                                            {synthesisSourceLabel(segment.last_synthesis_source)}
+                                          </Tag>
+                                        )}
                                         {!!segment.rating_count && (
                                           <Tag color="success">
                                             {formatRatingText(segment.average_rating, segment.rating_count)}
@@ -3418,7 +3993,7 @@ function App() {
                                         )}
                                         {!!segment.my_rating && <Tag color="gold">我的評分 {segment.my_rating}</Tag>}
                                       </Space>
-                                      <Button href={segmentAudioSrc(selectedJob, segment)} icon={<DownloadOutlined />}>
+                                      <Button href={segmentAudioDownloadSrc(selectedJob, segment)} icon={<DownloadOutlined />}>
                                         WAV
                                       </Button>
                                     </Flex>
@@ -3433,6 +4008,33 @@ function App() {
                                       <Button size="small" onClick={() => shareMedia(`segment:${selectedJob.id}:${segment.index}`, `${jobDisplayTitle(selectedJob)} Segment ${segment.index}`, 'line')}>LINE</Button>
                                       <Button size="small" onClick={() => shareMedia(`segment:${selectedJob.id}:${segment.index}`, `${jobDisplayTitle(selectedJob)} Segment ${segment.index}`, 'facebook')}>Facebook</Button>
                                     </Space>
+                                    {segment.audio_review && (
+                                      <div className="audio-review-panel">
+                                        <Flex align="center" justify="space-between" gap={8} wrap>
+                                          <Space size={8} wrap>
+                                            <Text strong>音訊校對</Text>
+                                            {segment.audio_review.comparison?.similarity != null && (
+                                              <Tag color={segment.audio_review.comparison.similarity >= 0.8 ? 'success' : segment.audio_review.comparison.similarity >= 0.65 ? 'warning' : 'error'}>
+                                                相似度 {(segment.audio_review.comparison.similarity * 100).toFixed(1)}%
+                                              </Tag>
+                                            )}
+                                            {segment.audio_review.comparison?.cer != null && <Tag>CER {(segment.audio_review.comparison.cer * 100).toFixed(1)}%</Tag>}
+                                            {(segment.audio_review.issues ?? []).map((issue) => <Tag color="error" key={issue}>{issue}</Tag>)}
+                                          </Space>
+                                          <Tag color={segment.audio_review.asr_status?.available ? 'processing' : 'default'}>
+                                            {segment.audio_review.asr_status?.available ? 'Breeze ASR' : 'ASR 未執行'}
+                                          </Tag>
+                                        </Flex>
+                                        {segment.audio_review.asr_transcript ? (
+                                          <Text type="secondary">ASR 轉寫：{segment.audio_review.asr_transcript}</Text>
+                                        ) : (
+                                          <Text type="secondary">{segment.audio_review.asr_status?.reason || '尚未有 ASR 轉寫結果。'}</Text>
+                                        )}
+                                        {segment.audio_review.mms_status?.audio_file && (
+                                          <Text type="secondary">MMS 對照音檔：{segment.audio_review.mms_status.audio_file}</Text>
+                                        )}
+                                      </div>
+                                    )}
                                     <div className="segment-text-grid">
                                       <div>
                                         <Text strong>原本中文</Text>
@@ -3571,6 +4173,14 @@ function App() {
                                           <Button type="primary" onClick={() => submitFeedback(segment)}>
                                             儲存這段回饋
                                           </Button>
+                                          <Select<SynthesisSource>
+                                            value={segmentSynthesisSources[segment.index] ?? 'taigi'}
+                                            onChange={(value) => setSegmentSynthesisSources((current) => ({ ...current, [segment.index]: value }))}
+                                            options={[
+                                              { value: 'taigi', label: '用台語文字生成' },
+                                              { value: 'tailo', label: '用台羅生成' },
+                                            ]}
+                                          />
                                           <Button
                                             icon={<AudioOutlined />}
                                             loading={!!regeneratingSegments[segment.index]}
@@ -3637,8 +4247,77 @@ function App() {
                   )}
                 </Card>
 
+                <Card className="featured-jobs-card">
+                  <div className="card-title">
+                    <Title level={4} style={{ margin: 0 }}>首頁精選成果</Title>
+                    <Text type="secondary">挑選示範影片直接播放與評分。</Text>
+                  </div>
+                  {!jobsLoaded ? (
+                    <Alert type="info" showIcon message="正在載入精選成果" />
+                  ) : featuredJobs.length === 0 ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message={isAdmin ? '尚未釘選首頁精選成果' : '目前尚未設定首頁精選成果'}
+                      description={isAdmin ? '到工作總覽或最新成果卡片，把適合示範的完成工作設為首頁精選。' : undefined}
+                    />
+                  ) : (
+                    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                      {featuredJobs.map((job) => (
+                        <button
+                          key={job.id}
+                          type="button"
+                          className={`featured-job-button ${selectedJobId === job.id ? 'is-selected' : ''}`}
+                          onClick={() => setSelectedJobId(job.id)}
+                        >
+                          <span>
+                            <Text strong ellipsis>{jobDisplayTitle(job)}</Text>
+                            <br />
+                            <Text type="secondary">
+                              {formatRatingText(job.rating_average, job.rating_count || 0)}
+                              {job.play_count ? ` · 播放 ${job.play_count} 次` : ''}
+                            </Text>
+                          </span>
+                          <Tag color="gold">精選</Tag>
+                        </button>
+                      ))}
+                    </Space>
+                  )}
+                </Card>
+
+                <Card className="preferences-card">
+                  <div className="card-title">
+                    <Title level={3} style={{ margin: 0 }}>{t('preferences')}</Title>
+                    <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                      使用者介面、時間格式、登入狀態與管理員系統設定集中在這裡調整。
+                    </Paragraph>
+                  </div>
+                  <Form layout="vertical">
+                    <Form.Item label="介面語言">
+                      <Select
+                        value={uiLanguage}
+                        options={UI_LANGUAGES}
+                        onChange={changeUiLanguage}
+                      />
+                    </Form.Item>
+                    <Form.Item label={t('dateTimeFormat')}>
+                      <Select<DateTimeFormatPreference>
+                        aria-label={t('dateTimeFormat')}
+                        value={dateTimeFormat}
+                        onChange={changeDateTimeFormat}
+                        options={[
+                          { value: 'system', label: t('dateSystem') },
+                          { value: 'taiwan', label: t('dateTaiwan') },
+                          { value: 'us', label: t('dateUs') },
+                          { value: 'iso', label: t('dateIso') },
+                        ]}
+                      />
+                    </Form.Item>
+                  </Form>
+                </Card>
+
                 {!signedIn ? (
-                  <Card className="account-card">
+                  <Card className="account-card preferences-card">
                     <div className="card-title">
                       <Title level={4} style={{ margin: 0 }}>匿名使用者</Title>
                       <Text type="secondary">可先使用匿名台語暱稱評分與回報。</Text>
@@ -3673,9 +4352,30 @@ function App() {
 	                          )}
                       </Space>
 	                    )}
+                    <Divider />
+                    <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                      <div>
+                        <Text strong>Email 登入</Text>
+                        <br />
+                        <Text type="secondary">目前開放用 email 登入，登入後可保留自己的評分與申請紀錄。</Text>
+                      </div>
+                      <Flex gap={8} wrap>
+                        <Input
+                          type="email"
+                          value={loginEmail}
+                          onChange={(event) => setLoginEmail(event.target.value)}
+                          onPressEnter={signIn}
+                          placeholder="your@email.com"
+                          style={{ flex: '1 1 240px' }}
+                        />
+                        <Button type="primary" icon={<LockOutlined />} onClick={signIn}>
+                          登入
+                        </Button>
+                      </Flex>
+                    </Space>
 	                  </Card>
                 ) : !isAdmin ? (
-                  <Card className="account-card">
+                  <Card className="account-card preferences-card">
                     <div className="card-title">
                       <Title level={3}>帳號</Title>
                       <Paragraph type="secondary">
@@ -3685,7 +4385,7 @@ function App() {
                     <Button icon={<LogoutOutlined />} onClick={logout}>登出</Button>
                   </Card>
                 ) : (
-                  <Card className="admin-card">
+                  <Card className="admin-card preferences-card">
                     <div className="card-title">
                       <Title level={3}>Admin settings</Title>
                       <Paragraph type="secondary">
@@ -3885,13 +4585,27 @@ function App() {
                   )}
                   {stats && (
                     <div className="stats-trends">
-                      <Title level={4}>{t('lexiconQualityTitle')}</Title>
+                      <Title level={4}>工作成果正確率與語詞資料庫品質</Title>
                       <div className="stats-grid">
+                        <div><Text type="secondary">工作成果正確率</Text><strong>{formatPercent(stats.job_quality?.ok_rate)}</strong></div>
+                        <div><Text type="secondary">工作成果有問題率</Text><strong>{formatPercent(stats.job_quality?.problem_rate)}</strong></div>
+                        <div><Text type="secondary">成果標示沒問題</Text><strong>{stats.job_quality?.ok_count ?? 0}</strong></div>
+                        <div><Text type="secondary">成果標示有問題</Text><strong>{stats.job_quality?.problem_count ?? 0}</strong></div>
+                        <div><Text type="secondary">中文語音未轉台語</Text><strong>{stats.job_quality?.chinese_voice_not_taigi_count ?? 0}</strong></div>
+                        <div><Text type="secondary">成果已標示</Text><strong>{stats.job_quality?.reviewed_total ?? 0}</strong></div>
+                        <div><Text type="secondary">成果尚未標示</Text><strong>{stats.job_quality?.unreviewed_count ?? 0}</strong></div>
                         <div><Text type="secondary">詞條已評分</Text><strong>{stats.lexicon_quality?.word_entries_rated ?? 0}</strong></div>
                         <div><Text type="secondary">詞條未評分</Text><strong>{stats.lexicon_quality?.word_entries_unrated ?? 0}</strong></div>
                         <div><Text type="secondary">語音影片已評分</Text><strong>{stats.lexicon_quality?.word_assets_rated ?? 0}</strong></div>
                         <div><Text type="secondary">語音影片未評分</Text><strong>{stats.lexicon_quality?.word_assets_unrated ?? 0}</strong></div>
                         <div><Text type="secondary">問題詞料</Text><strong>{stats.lexicon_quality?.word_problem_count ?? 0}</strong></div>
+                        <div><Text type="secondary">語句斷詞有問題</Text><strong>{stats.lexicon_quality?.word_token_problem_count ?? 0}</strong></div>
+                        <div><Text type="secondary">語句斷詞沒問題</Text><strong>{stats.lexicon_quality?.word_token_ok_count ?? 0}</strong></div>
+                        <div><Text type="secondary">有斷詞回饋語句</Text><strong>{stats.lexicon_quality?.word_token_reviewed_entries ?? 0}</strong></div>
+                        <div><Text type="secondary">分段斷詞有問題</Text><strong>{stats.lexicon_quality?.segment_token_problem_count ?? 0}</strong></div>
+                        <div><Text type="secondary">分段斷詞沒問題</Text><strong>{stats.lexicon_quality?.segment_token_ok_count ?? 0}</strong></div>
+                        <div><Text type="secondary">音訊校對工作</Text><strong>{stats.lexicon_quality?.audio_review_requests ?? 0}</strong></div>
+                        <div><Text type="secondary">音訊校對完成</Text><strong>{stats.lexicon_quality?.audio_review_complete ?? 0}</strong></div>
                         <div><Text type="secondary">重新生成申請</Text><strong>{stats.lexicon_quality?.word_regeneration_requests ?? 0}</strong></div>
                         <div><Text type="secondary">多語系申請</Text><strong>{stats.lexicon_quality?.word_translation_requests ?? 0}</strong></div>
                         <div><Text type="secondary">資料匯出申請</Text><strong>{stats.lexicon_quality?.source_export_requests ?? 0}</strong></div>
@@ -4133,10 +4847,18 @@ function App() {
                       message="沒有完全相同的詞條"
                       description={(
                         <Flex align="center" justify="space-between" gap={12} wrap>
-                          <Text>{t('requestNewWordHint')}</Text>
-                          <Button type="primary" onClick={requestMissingWord}>
-                            {t('requestNewWord')}：{wordQuery.trim()}
-                          </Button>
+                          <Space direction="vertical" size={2}>
+                            <Text>{t('requestNewWordHint')}</Text>
+                            <Text type="secondary">{t('itaigiReferenceHint')}</Text>
+                          </Space>
+                          <Space wrap>
+                            <Button icon={<LinkOutlined />} href={itaigiSearchUrl(wordQuery)} target="_blank">
+                              {t('itaigiReference')}
+                            </Button>
+                            <Button type="primary" onClick={requestMissingWord}>
+                              {t('requestNewWord')}：{wordQuery.trim()}
+                            </Button>
+                          </Space>
                         </Flex>
                       )}
                     />
@@ -4148,10 +4870,18 @@ function App() {
                       message={t('lexiconEmpty')}
                       description={wordQuery.trim() ? (
                         <Flex align="center" justify="space-between" gap={12} wrap>
-                          <Text>{t('requestNewWordHint')}</Text>
-                          <Button type="primary" onClick={requestMissingWord}>
-                            {t('requestNewWord')}：{wordQuery.trim()}
-                          </Button>
+                          <Space direction="vertical" size={2}>
+                            <Text>{t('requestNewWordHint')}</Text>
+                            <Text type="secondary">{t('itaigiReferenceHint')}</Text>
+                          </Space>
+                          <Space wrap>
+                            <Button icon={<LinkOutlined />} href={itaigiSearchUrl(wordQuery)} target="_blank">
+                              {t('itaigiReference')}
+                            </Button>
+                            <Button type="primary" onClick={requestMissingWord}>
+                              {t('requestNewWord')}：{wordQuery.trim()}
+                            </Button>
+                          </Space>
                         </Flex>
                       ) : undefined}
                     />
@@ -4175,6 +4905,9 @@ function App() {
                                   </Tag>
                                   {word.status === 'requested' && <Tag color="warning">新增申請</Tag>}
                                   {word.problem && <Tag color="error">需處理</Tag>}
+                                  {word.problem && <ProblemTypeTag problemType={word.problem_type} />}
+                                  {(word.token_problem_count ?? 0) > 0 && <Tag color="error">斷詞問題 {word.token_problem_count}</Tag>}
+                                  {(word.token_ok_count ?? 0) > 0 && <Tag color="success">斷詞確認 {word.token_ok_count}</Tag>}
                                   {isGenerating && <Tag color="processing">生成中</Tag>}
                                   {word.generation_status === 'failed' && <Tag color="error">生成失敗</Tag>}
                                   <Tag color="default">{word.count}</Tag>
@@ -4200,7 +4933,7 @@ function App() {
                                     播放語音
                                   </Button>
                                 ) : (
-                                  <Button size="small" icon={<AudioOutlined />} onClick={() => generateWordAudio(word)}>
+                                  <Button size="small" icon={<AudioOutlined />} onClick={() => generateWordAudio(word, wordSynthesisSources[word.id] ?? 'taigi')}>
                                     產生語音
                                   </Button>
                                 )}
@@ -4222,12 +4955,95 @@ function App() {
                                     description={word.generation_status === 'queued' && word.generation_position ? `目前排第 ${word.generation_position} 個。` : word.generation_error}
                                   />
                                 )}
+                                <Flex align="center" gap={10} wrap className="synthesis-source-control">
+                                  <Text strong>新語音合成來源</Text>
+                                  <Select<SynthesisSource>
+                                    size="small"
+                                    value={wordSynthesisSources[word.id] ?? 'taigi'}
+                                    onChange={(value) => setWordSynthesisSources((current) => ({ ...current, [word.id]: value }))}
+                                    options={[
+                                      { value: 'taigi', label: '台語文字' },
+                                      { value: 'tailo', label: '台羅拼音' },
+                                    ]}
+                                  />
+                                  <Text type="secondary">每次生成會記錄來源，方便比較差異。</Text>
+                                </Flex>
+                                <div className="itaigi-reference-panel">
+                                  <Flex align="center" justify="space-between" gap={8} wrap>
+                                    <Space direction="vertical" size={2}>
+                                      <Text strong>iTaigi 參考語料</Text>
+                                      <Text type="secondary">查詢 iTaigi 詞條、台羅與合成音檔，套用後會用該台羅重新產生詞語語音。</Text>
+                                    </Space>
+                                    <Space size={8} wrap>
+                                      <Button size="small" icon={<LinkOutlined />} href={itaigiSearchUrl(word.source)} target="_blank">
+                                        開啟 iTaigi
+                                      </Button>
+                                      <Button
+                                        size="small"
+                                        icon={<FileSearchOutlined />}
+                                        loading={!!loadingItaigiReferences[word.id]}
+                                        onClick={() => loadItaigiReference(word)}
+                                      >
+                                        查詢參考
+                                      </Button>
+                                    </Space>
+                                  </Flex>
+                                  {word.itaigi_reference?.tailo && (
+                                    <Alert
+                                      type="success"
+                                      showIcon
+                                      message="目前已套用 iTaigi 參考"
+                                      description={`${word.itaigi_reference.taigi} / ${word.itaigi_reference.tailo}`}
+                                    />
+                                  )}
+                                  {itaigiReferences[word.id] && (
+                                    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                      <Text type="secondary">{itaigiReferences[word.id].license_note}</Text>
+                                      {itaigiReferences[word.id].candidates.length === 0 ? (
+                                        <Alert type="info" showIcon message="iTaigi 目前沒有符合的參考語料。" />
+                                      ) : (
+                                        itaigiReferences[word.id].candidates.map((candidate) => {
+                                          const applyKey = `${word.id}:${candidate.id || candidate.tailo}`;
+                                          return (
+                                            <div key={applyKey} className="itaigi-reference-row">
+                                              <Flex align="center" justify="space-between" gap={10} wrap>
+                                                <Space direction="vertical" size={2}>
+                                                  <Text strong>{candidate.taigi}</Text>
+                                                  <Text type="secondary">{candidate.tailo}</Text>
+                                                  <Text type="secondary">
+                                                    按呢講好 {candidate.good ?? 0}，按呢怪怪 {candidate.bad ?? 0}
+                                                    {candidate.contributor ? ` · ${candidate.contributor}` : ''}
+                                                  </Text>
+                                                </Space>
+                                                <Space size={8} wrap>
+                                                  {candidate.audio_url && (
+                                                    <audio controls preload="none" src={candidate.audio_url} />
+                                                  )}
+                                                  <Button
+                                                    size="small"
+                                                    type="primary"
+                                                    loading={!!applyingItaigiReferences[applyKey]}
+                                                    onClick={() => applyItaigiReference(word, candidate)}
+                                                  >
+                                                    套用並重新產生
+                                                  </Button>
+                                                </Space>
+                                              </Flex>
+                                            </div>
+                                          );
+                                        })
+                                      )}
+                                    </Space>
+                                  )}
+                                </div>
                                 {(word.source_tokens ?? []).length > 1 && (
                                   <div className="segment-token-panel">
                                     <Flex align="center" justify="space-between" gap={8} wrap>
                                       <Space size={8} wrap>
                                         <Text strong>語句斷詞標示</Text>
                                         <Tag>{word.source_tokens?.length ?? 0} 詞</Tag>
+                                        {(word.token_problem_count ?? 0) > 0 && <Tag color="error">有問題 {word.token_problem_count}</Tag>}
+                                        {(word.token_ok_count ?? 0) > 0 && <Tag color="success">沒問題 {word.token_ok_count}</Tag>}
                                         {selectedTokenCount > 0 && <Tag color="processing">已選 {selectedTokenCount}</Tag>}
                                       </Space>
                                       <Space size={6} wrap>
@@ -4294,7 +5110,14 @@ function App() {
                                       <div key={assetItem.id} className="word-asset-row">
                                         <Flex align="center" justify="space-between" gap={10} wrap>
                                           <Space size={8} wrap>
-                                            <Tag color={index === 0 ? 'gold' : 'blue'}>{index === 0 ? '目前最高排序' : `版本 ${index + 1}`}</Tag>
+                                            <Tag color={assetItem.matches_current_reference ? 'green' : index === 0 ? 'gold' : 'blue'}>
+                                              {assetItem.matches_current_reference ? '套用參考後生成' : index === 0 ? '目前最高排序' : `版本 ${index + 1}`}
+                                            </Tag>
+                                            {assetItem.synthesis_source && (
+                                              <Tag color={assetItem.synthesis_source === 'tailo' ? 'cyan' : 'default'}>
+                                                {synthesisSourceLabel(assetItem.synthesis_source)}
+                                              </Tag>
+                                            )}
                                             <Text type="secondary">
                                               {assetItem.generated_by_name || '匿名使用者'} · {assetItem.created_at ? formatDateTime(assetItem.created_at) : '未知時間'}
                                             </Text>
@@ -4304,6 +5127,9 @@ function App() {
                                             {!!assetItem.play_count && <Text type="secondary">播放 {assetItem.play_count} 次</Text>}
                                           </Space>
                                         </Flex>
+                                        {assetItem.synthesis_text && (
+                                          <Text type="secondary">合成文字：{assetItem.synthesis_text}</Text>
+                                        )}
                                         {assetItem.has_audio && (
                                           <div>
                                             <audio
@@ -4317,6 +5143,7 @@ function App() {
                                               <Rate value={assetItem.my_rating ?? 0} onChange={(rating) => rateWordAsset(word, assetItem, rating)} />
                                             </Flex>
                                             <Space size={8} wrap className="share-actions">
+                                              <Button size="small" icon={<DownloadOutlined />} href={wordAssetDownloadSrc(word, assetItem, 'audio')}>下載語音</Button>
                                               <Button size="small" icon={<CopyOutlined />} onClick={() => shareMedia(`word:${word.id}:${assetItem.id}:audio`, word.source, 'copy')}>複製音訊連結</Button>
                                               <Button size="small" onClick={() => shareMedia(`word:${word.id}:${assetItem.id}:audio`, word.source, 'line')}>LINE</Button>
                                               <Button size="small" onClick={() => shareMedia(`word:${word.id}:${assetItem.id}:audio`, word.source, 'facebook')}>Facebook</Button>
@@ -4329,6 +5156,7 @@ function App() {
                                               <Button size="small" icon={<VideoCameraOutlined />} onClick={() => openWordAssetVideo(word, assetItem)}>
                                                 開新視窗播放影片
                                               </Button>
+                                              <Button size="small" icon={<DownloadOutlined />} href={wordAssetDownloadSrc(word, assetItem, 'video')}>下載影片</Button>
                                               <Button size="small" icon={<CopyOutlined />} onClick={() => shareMedia(`word:${word.id}:${assetItem.id}:video`, word.source, 'copy')}>複製影片連結</Button>
                                               <Button size="small" onClick={() => shareMedia(`word:${word.id}:${assetItem.id}:video`, word.source, 'line')}>LINE</Button>
                                               <Button size="small" onClick={() => shareMedia(`word:${word.id}:${assetItem.id}:video`, word.source, 'facebook')}>Facebook</Button>
@@ -4342,11 +5170,14 @@ function App() {
                                 <Flex align="center" justify="space-between" gap={10} wrap>
                                   <Text type="secondary">詞條評分可直接在精簡列調整。</Text>
                                   <Space size={8} wrap>
-                                    <Button size="small" type={word.problem ? 'primary' : 'default'} onClick={() => generateWordAudio(word)}>
+                                    <Button size="small" type={word.problem ? 'primary' : 'default'} onClick={() => generateWordAudio(word, wordSynthesisSources[word.id] ?? 'taigi')}>
                                       {word.problem ? t('regenerateWord') : t('generateWord')}
                                     </Button>
                                     <Button size="small" onClick={() => reportWordIssue(word)}>
                                       {t('reportIssue')}
+                                    </Button>
+                                    <Button size="small" danger onClick={() => reportWordIssue(word, 'chinese_voice_not_taigi')}>
+                                      中文語音未轉台語
                                     </Button>
                                     <Button size="small" onClick={() => requestWordCorpus(word)}>
                                       {t('requestCorpus')}
@@ -4365,7 +5196,7 @@ function App() {
                 <Card className="jobs-card">
                   <Flex align="center" justify="space-between" className="card-title">
                     <Title level={3} style={{ margin: 0 }}>{t('jobs')}</Title>
-                    <Text type="secondary">{jobs.length} 筆</Text>
+                    <Text type="secondary">{jobsLoaded ? `${jobs.length} 筆` : '載入中'}</Text>
                   </Flex>
                   <div className="job-overview-controls">
                     <Input.Search
@@ -4395,6 +5226,16 @@ function App() {
                         { value: 'segment_regeneration', label: '重生分段' },
                         { value: 'word_asset', label: '詞語語音' },
                         { value: 'maintenance', label: '維護清理' },
+                        { value: 'audio_review', label: '音訊校對' },
+                      ]}
+                    />
+                    <Select<CompletedJobContentFilter>
+                      value={completedJobContentFilter}
+                      onChange={setCompletedJobContentFilter}
+                      options={[
+                        { value: 'all', label: '全部內容' },
+                        { value: 'long_article', label: '長篇文章' },
+                        { value: 'short_word_audio', label: '短詞語音' },
                       ]}
                     />
                     <Select<CompletedJobRatingFilter>
@@ -4404,6 +5245,17 @@ function App() {
                         { value: 'all', label: '全部評分' },
                         { value: 'rated', label: '已有評分' },
                         { value: 'unrated', label: '尚未評分' },
+                      ]}
+                    />
+                    <Select<CompletedJobIssueFilter>
+                      value={completedJobIssueFilter}
+                      onChange={setCompletedJobIssueFilter}
+                      options={[
+                        { value: 'all', label: '全部問題狀態' },
+                        { value: 'problem', label: '成果有問題' },
+                        { value: 'chinese_voice_not_taigi', label: '中文語音未轉台語' },
+                        { value: 'ok', label: '標示沒問題' },
+                        { value: 'unreviewed', label: '尚未標示' },
                       ]}
                     />
                     <Select<CompletedJobMediaFilter>
@@ -4416,7 +5268,48 @@ function App() {
                       ]}
                     />
                   </div>
-                  {jobs.length === 0 ? (
+                  {isAdmin && (
+                    <div className="admin-batch-tool">
+                      <Flex align="center" justify="space-between" gap={12} wrap>
+                        <div>
+                          <Text strong>特定詞批次重生工具</Text>
+                          <br />
+                          <Text type="secondary">搜尋含指定詞的已完成稿件分段，先寫入轉譯記憶，再批次排程重生語音。</Text>
+                        </div>
+                        <Space size={8} wrap>
+                          <Input
+                            value={termSearch}
+                            onChange={(event) => setTermSearch(event.target.value)}
+                            placeholder="搜尋詞，例如：美元"
+                            style={{ width: 160 }}
+                          />
+                          <Input
+                            value={termReplacement}
+                            onChange={(event) => setTermReplacement(event.target.value)}
+                            placeholder="台語替換，例如：美金"
+                            style={{ width: 160 }}
+                          />
+                          <Button loading={runningTermBatch} onClick={() => runTermBatchRegeneration(true)}>
+                            搜尋段落
+                          </Button>
+                          <Button type="primary" loading={runningTermBatch} onClick={() => runTermBatchRegeneration(false)}>
+                            批次排程重生
+                          </Button>
+                        </Space>
+                      </Flex>
+                      {termBatchResult && (
+                        <Alert
+                          type={termBatchResult.queued_jobs.length ? 'success' : 'info'}
+                          showIcon
+                          message={`${termBatchResult.search_term} → ${termBatchResult.taigi_replacement}`}
+                          description={`找到 ${termBatchResult.match_count} 個相關分段，${termBatchResult.regeneratable_count} 個可重生；已排程 ${termBatchResult.queued_jobs.length} 筆工作。`}
+                        />
+                      )}
+                    </div>
+                  )}
+                  {!jobsLoaded || (loadingJobs && jobs.length === 0) ? (
+                    <Alert type="info" showIcon message="正在載入工作資料" />
+                  ) : jobs.length === 0 ? (
                     <Alert type="info" showIcon message={signedIn ? '目前沒有工作' : '目前沒有已完成的公開工作'} />
                   ) : (
                     <Space direction="vertical" size={14} style={{ width: '100%' }}>
@@ -4451,6 +5344,9 @@ function App() {
                                     <Text strong ellipsis>{jobDisplayTitle(job)}</Text>
                                     <Tag color={jobKindColor(job)}>{jobKindLabel(job, t)}</Tag>
                                     <Tag color={statusColor[job.status]}>{job.status}</Tag>
+                                    {job.featured_at && <Tag color="gold">首頁精選</Tag>}
+                                    {job.problem && <Tag color="error">成果有問題</Tag>}
+                                    {job.problem && <ProblemTypeTag problemType={job.problem_type} />}
                                   </div>
                                   <Progress percent={job.progress} size="small" showInfo={false} />
                                   <PipelineStrip job={job} compact />
@@ -4462,20 +5358,66 @@ function App() {
                                   </Text>
                                 </button>
                                 {job.status === 'complete' && (
-                                  <Flex align="center" justify="space-between" gap={10} wrap className="job-row-actions">
-                                    <Flex align="center" gap={8} wrap>
-                                      <Text type="secondary">我的評分</Text>
-                                      <Rate value={job.my_rating ?? 0} onChange={(rating) => rateJob(job, rating)} />
-                                    </Flex>
-                                    <Space size={8} wrap>
-                                      <Button size="small" onClick={() => openJobInWorkTab(job.id)}>查看播放與分段</Button>
-                                      {isAdmin && (
-                                        <Button size="small" danger icon={<DeleteOutlined />} onClick={() => deleteJob(job)}>
-                                          刪除
+                                  <div className="job-row-actions">
+                                    {(job.audio_path || job.video_path) && (
+                                      <div className="job-row-media">
+                                        {job.audio_path && (
+                                          <div className="job-inline-player">
+                                            <Text type="secondary">音訊</Text>
+                                            <audio controls preload="none" src={jobMediaSrc(job, 'audio')} />
+                                          </div>
+                                        )}
+                                        {job.video_path && (
+                                          <div className="job-inline-player">
+                                            <Text type="secondary">影片</Text>
+                                            <video controls preload="metadata" src={jobMediaSrc(job, 'video')} />
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                    <Flex align="center" justify="space-between" gap={10} wrap>
+                                      <Flex align="center" gap={8} wrap>
+                                        <Text type="secondary">我的評分</Text>
+                                        <Rate value={job.my_rating ?? 0} onChange={(rating) => rateJob(job, rating)} />
+                                        {job.problem ? (
+                                          <Text type="danger">{job.problem_reason || '已標示成果有問題'}</Text>
+                                        ) : (
+                                          <Text type="secondary">尚未標示問題</Text>
+                                        )}
+                                      </Flex>
+                                      <Space size={8} wrap>
+                                        <Button size="small" danger={job.problem} onClick={() => markJobIssue(job, job.problem ? 'ok' : 'problem')}>
+                                          {job.problem ? '標示沒問題' : '標示成果有問題'}
                                         </Button>
-                                      )}
-                                    </Space>
-                                  </Flex>
+                                        {job.problem_type !== 'chinese_voice_not_taigi' && (
+                                          <Button size="small" danger onClick={() => markJobIssue(job, 'problem', 'chinese_voice_not_taigi')}>
+                                            中文語音未轉台語
+                                          </Button>
+                                        )}
+                                        {isAdmin && job.status === 'complete' && (
+                                          <Button size="small" onClick={() => setJobFeatured(job, !job.featured_at)}>
+                                            {job.featured_at ? '取消精選' : '設為首頁精選'}
+                                          </Button>
+                                        )}
+                                        {isAdmin && job.kind === 'script' && (
+                                          <Button
+                                            size="small"
+                                            icon={<ReloadOutlined />}
+                                            loading={!!fullRegeneratingJobs[job.id]}
+                                            onClick={() => regenerateFullJob(job)}
+                                          >
+                                            整篇重新生成
+                                          </Button>
+                                        )}
+                                        <Button size="small" onClick={() => openJobInWorkTab(job.id)}>查看播放與分段</Button>
+                                        {isAdmin && (
+                                          <Button size="small" danger icon={<DeleteOutlined />} onClick={() => deleteJob(job)}>
+                                            刪除
+                                          </Button>
+                                        )}
+                                      </Space>
+                                    </Flex>
+                                  </div>
                                 )}
                                 {job.status === 'failed' && (
                                   <Flex justify="flex-end" gap={8} wrap className="job-row-actions">

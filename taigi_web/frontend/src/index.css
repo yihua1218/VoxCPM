@@ -188,7 +188,8 @@ a {
 .app-grid.show-work .jobs-card,
 .app-grid.show-work .stats-card,
 .app-grid.show-work .sources-card,
-.app-grid.show-work .about-card {
+.app-grid.show-work .about-card,
+.app-grid.show-work .preferences-card {
   display: none;
 }
 
@@ -196,7 +197,8 @@ a {
 .app-grid.show-jobs,
 .app-grid.show-stats,
 .app-grid.show-sources,
-.app-grid.show-about {
+.app-grid.show-about,
+.app-grid.show-preferences {
   grid-template-columns: minmax(0, 1fr);
 }
 
@@ -204,7 +206,8 @@ a {
 .app-grid.show-jobs > .ant-space:first-child,
 .app-grid.show-stats > .ant-space:first-child,
 .app-grid.show-sources > .ant-space:first-child,
-.app-grid.show-about > .ant-space:first-child {
+.app-grid.show-about > .ant-space:first-child,
+.app-grid.show-preferences > .ant-space:first-child {
   display: none;
 }
 
@@ -228,6 +231,10 @@ a {
   display: none;
 }
 
+.app-grid.show-preferences > .ant-space:nth-child(2) > .ant-space-item:not(:has(.preferences-card)) {
+  display: none;
+}
+
 .card-title {
   margin-bottom: 14px;
 }
@@ -240,6 +247,10 @@ a {
   order: 2;
 }
 
+.create-job-card {
+  scroll-margin-top: 92px;
+}
+
 .job-media-panel {
   border: 1px solid #d6e8ff;
   border-radius: 8px;
@@ -247,6 +258,10 @@ a {
   background: #f5faff;
   display: grid;
   gap: 12px;
+}
+
+.create-job-shortcut {
+  border-color: #91caff;
 }
 
 .job-media-panel audio,
@@ -308,6 +323,25 @@ a {
   border-top: 1px solid #f0f0f0;
 }
 
+.job-row-media {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr);
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.job-inline-player {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.job-inline-player audio,
+.job-inline-player video {
+  width: 100%;
+  max-height: 180px;
+}
+
 .job-group {
   display: grid;
   gap: 8px;
@@ -315,9 +349,19 @@ a {
 
 .job-overview-controls {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) repeat(4, minmax(128px, 160px));
+  grid-template-columns: minmax(220px, 1fr) repeat(5, minmax(128px, 160px));
   gap: 8px;
   margin-bottom: 14px;
+}
+
+.admin-batch-tool {
+  border: 1px solid #e8e8ed;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 14px;
+  background: #fbfcff;
+  display: grid;
+  gap: 10px;
 }
 
 .lexicon-controls {
@@ -343,6 +387,11 @@ a {
 .word-row.has-problem {
   border-color: #ffccc7;
   background: #fff7f6;
+}
+
+.issue-type-tag {
+  font-weight: 800;
+  border-width: 1.5px;
 }
 
 .word-row-main {
@@ -395,6 +444,20 @@ a {
 .word-asset-rating {
   margin-top: 6px;
   margin-bottom: 6px;
+}
+
+.itaigi-reference-panel,
+.itaigi-reference-row {
+  border: 1px solid #e8e8ed;
+  border-radius: 8px;
+  padding: 10px;
+  background: #fbfbfd;
+  display: grid;
+  gap: 10px;
+}
+
+.itaigi-reference-row audio {
+  width: min(280px, 100%);
 }
 
 .word-video-actions {
@@ -534,6 +597,30 @@ a {
   margin-top: 12px;
   padding-top: 10px;
   border-top: 1px solid #f0f0f0;
+}
+
+.featured-job-button {
+  width: 100%;
+  border: 1px solid #e8e8ed;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.featured-job-button:hover,
+.featured-job-button.is-selected {
+  border-color: #0071e3;
+  background: #f5faff;
+}
+
+.featured-job-button > span {
+  min-width: 0;
 }
 
 .stats-trends {
@@ -793,6 +880,11 @@ a {
   line-height: 1.6;
 }
 
+.long-textarea textarea {
+  max-height: min(72vh, 760px) !important;
+  overflow-y: auto !important;
+}
+
 .compact-textarea textarea {
   min-height: 38px !important;
   padding-top: 8px;
@@ -820,6 +912,20 @@ a {
   background: #fbfbfd;
   display: grid;
   gap: 8px;
+}
+
+.audio-review-panel {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #d9e8ff;
+  border-radius: 8px;
+  background: #f7fbff;
+}
+
+.synthesis-source-control {
+  padding: 8px 0;
 }
 
 .segment-token-list {
@@ -1167,6 +1273,10 @@ a {
 
   .job-row .ant-progress {
     margin: 6px 0;
+  }
+
+  .job-row-media {
+    grid-template-columns: 1fr;
   }
 
   .pipeline-strip {

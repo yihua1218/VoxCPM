@@ -83,6 +83,10 @@ TRANSLATION_MEMORY = Path(os.environ.get("TAIGI_WEB_TRANSLATION_MEMORY", JOB_ROO
 WORD_DB = Path(os.environ.get("TAIGI_WEB_WORD_DB", JOB_ROOT / "word_db.json"))
 WORD_ASSET_DIR = Path(os.environ.get("TAIGI_WEB_WORD_ASSET_DIR", JOB_ROOT / "word_assets"))
 WORD_AUTO_GENERATE_INTERVAL_SECONDS = int(os.environ.get("TAIGI_WEB_WORD_AUTO_GENERATE_INTERVAL_SECONDS", "1800"))
+ENABLE_BREEZE_ASR = os.environ.get("TAIGI_WEB_ENABLE_BREEZE_ASR", "0").lower() in {"1", "true", "yes", "on"}
+BREEZE_ASR_MODEL = os.environ.get("TAIGI_WEB_BREEZE_ASR_MODEL", "MediaTek-Research/Breeze-ASR-26").strip()
+ENABLE_MMS_TTS = os.environ.get("TAIGI_WEB_ENABLE_MMS_TTS", "0").lower() in {"1", "true", "yes", "on"}
+MMS_TTS_MODEL = os.environ.get("TAIGI_WEB_MMS_TTS_MODEL", "facebook/mms-tts-nan").strip()
 SUBPROCESS_TIMEOUT_SECONDS = int(os.environ.get("TAIGI_WEB_SUBPROCESS_TIMEOUT_SECONDS", "600"))
 VIDEO_RENDER_TIMEOUT_SECONDS = int(os.environ.get("TAIGI_WEB_VIDEO_RENDER_TIMEOUT_SECONDS", "1800"))
 COMMAND_HEARTBEAT_SECONDS = int(os.environ.get("TAIGI_WEB_COMMAND_HEARTBEAT_SECONDS", "30"))
@@ -161,7 +165,8 @@ rate_limit_seen: dict[str, float] = {}
 job_queue: PriorityQueue = PriorityQueue()
 job_counter_lock = Lock()
 job_counter = 0
-RATE_LIMIT_SECONDS = int(os.environ.get("TAIGI_WEB_PUBLIC_JOB_INTERVAL_SECONDS", "600"))
+RATE_LIMIT_SECONDS = int(os.environ.get("TAIGI_WEB_PUBLIC_JOB_INTERVAL_SECONDS", "3600"))
+PUBLIC_ANONYMOUS_MAX_CHARS = int(os.environ.get("TAIGI_WEB_PUBLIC_ANONYMOUS_MAX_CHARS", "1200"))
 POSTGRES_DSN = os.environ.get("TAIGI_WEB_POSTGRES_DSN", "").strip()
 POSTGRES_SCHEMA = os.environ.get("TAIGI_WEB_POSTGRES_SCHEMA", "public").strip() or "public"
 SETTINGS_PATH = JOB_ROOT / "admin_settings.json"
@@ -268,7 +273,7 @@ class StaticSyncResult(BaseModel):
 
 class Job(BaseModel):
     id: str
-    kind: Literal["script", "word_asset", "segment_regeneration", "maintenance"] = "script"
+    kind: Literal["script", "word_asset", "segment_regeneration", "maintenance", "audio_review"] = "script"
     owner_id: Optional[str] = None
     title: str
     status: Literal["queued", "running", "complete", "failed"]
@@ -289,6 +294,14 @@ class Job(BaseModel):
     zip_path: Optional[str] = None
     onedrive_dir: Optional[str] = None
     error: Optional[str] = None
+    problem: bool = False
+    problem_type: str = ""
+    problem_reason: str = ""
+    problem_reported_at: Optional[float] = None
+    problem_reported_by: str = ""
+    featured_at: Optional[float] = None
+    featured_by: str = ""
+    featured_note: str = ""
     metadata: dict = Field(default_factory=dict)
 
 
@@ -308,14 +321,6 @@ class SegmentFeedback(BaseModel):
     corrections: list[SegmentCorrection] = []
 
 
-class SegmentRegenerateRequest(BaseModel):
-    rating: int = 0
-    note: str = ""
-    corrected_taigi_text: str = ""
-    corrected_tailo_text: str = ""
-    corrections: list[SegmentCorrection] = []
-
-
 class SegmentBatchRegenerateRequest(BaseModel):
     only_with_corrections: bool = False
 
@@ -326,6 +331,7 @@ class RetryJobRequest(BaseModel):
 
 class WordIssueRequest(BaseModel):
     reason: str = ""
+    issue_type: str = ""
 
 
 class WordCreateRequest(BaseModel):
@@ -345,6 +351,19 @@ class WordAssetRatingRequest(BaseModel):
     note: str = ""
 
 
+class WordGenerateRequest(BaseModel):
+    synthesis_source: Literal["taigi", "tailo"] = "taigi"
+
+
+class WordItaigiReferenceApplyRequest(BaseModel):
+    taigi: str
+    tailo: str
+    audio_url: str = ""
+    source_url: str = ""
+    good: int = 0
+    bad: int = 0
+
+
 class WordTokenReviewItem(BaseModel):
     source: str
     status: Literal["problem", "ok"]
@@ -359,6 +378,15 @@ class WordTranslationRequest(BaseModel):
     overwrite: bool = False
 
 
+class AudioReviewRequest(BaseModel):
+    run_asr: bool = True
+    generate_mms: bool = False
+
+
+class SegmentRegenerateRequest(SegmentFeedback):
+    synthesis_source: Literal["auto", "taigi", "tailo"] = "auto"
+
+
 class SourceExportRequest(BaseModel):
     languages: list[str] = []
     format: Literal["json", "sqlite", "csv"] = "json"
@@ -368,6 +396,24 @@ class SourceExportRequest(BaseModel):
 class JobRatingRequest(BaseModel):
     rating: int
     note: str = ""
+
+
+class JobIssueRequest(BaseModel):
+    status: Literal["problem", "ok"]
+    reason: str = ""
+    issue_type: str = ""
+
+
+class JobFeaturedRequest(BaseModel):
+    featured: bool
+    note: str = ""
+
+
+class TermBatchRegenerateRequest(BaseModel):
+    search_term: str
+    taigi_replacement: str
+    dry_run: bool = True
+    max_jobs: int = 50
 
 
 class StatActionRequest(BaseModel):
@@ -1025,6 +1071,65 @@ def retry_payload_for_script_job(job: Job) -> CreateJobRequest:
     )
 
 
+def queue_full_script_regeneration(source_job: Job, owner_id: str, admin_or_token: bool) -> Job:
+    if source_job.kind != "script":
+        raise HTTPException(status_code=400, detail={"message": "只有整段稿件影片工作可以整篇重新生成。"})
+    if source_job.status in {"queued", "running"}:
+        raise HTTPException(status_code=409, detail={"message": "這個工作仍在排程或執行中，完成後才能整篇重新生成。"})
+    payload = retry_payload_for_script_job(source_job)
+    payload = payload.model_copy(update={
+        "title": f"{source_job.title} 整篇重新生成",
+        "copy_to_onedrive": DEFAULT_COPY_TO_ONEDRIVE if admin_or_token else False,
+    })
+    new_job_id = uuid.uuid4().hex
+    new_job = Job(
+        id=new_job_id,
+        owner_id=owner_id,
+        title=payload.title,
+        status="queued",
+        stage="Queued",
+        progress=0,
+        created_at=time.time(),
+        updated_at=time.time(),
+        chinese_text=payload.chinese_text,
+        metadata={
+            "create_payload": payload.model_dump(),
+            "source_job_id": source_job.id,
+            "regenerate_mode": "full_script",
+        },
+    )
+    app_data["jobs"].add(new_job)
+    record_stat_action("regenerate_full_job", "job", new_job_id, metadata={"source_job_id": source_job.id})
+    enqueue_job(0, new_job_id, payload)
+    return new_job
+
+
+def segment_matches_term(segment: dict, term: str) -> bool:
+    fields = (
+        str(segment.get("source_text") or ""),
+        str(segment.get("taigi_text") or ""),
+        str(segment.get("corrected_taigi_text") or ""),
+        str(segment.get("tailo_text") or ""),
+    )
+    return any(term in value for value in fields)
+
+
+def replacement_for_term_segment(segment: dict, search_term: str, taigi_replacement: str) -> Optional[dict[str, str]]:
+    current_taigi = str(segment.get("corrected_taigi_text") or segment.get("taigi_text") or "").strip()
+    if not current_taigi:
+        return None
+    new_taigi = current_taigi.replace(search_term, taigi_replacement)
+    if new_taigi == current_taigi:
+        return None
+    new_tailo = tailo_for(new_taigi)
+    return {
+        "taigi_text": new_taigi,
+        "tailo_text": new_tailo,
+        "synthesis_text": new_taigi,
+        "synthesis_source": "taigi",
+    }
+
+
 def enqueue_retry_job(job: Job, priority: int) -> tuple[Job, Optional[CreateJobRequest]]:
     if job.status != "failed":
         raise HTTPException(status_code=409, detail={"message": "只有失敗的工作可以重新執行。"})
@@ -1052,6 +1157,7 @@ def enqueue_retry_job(job: Job, priority: int) -> tuple[Job, Optional[CreateJobR
             generation_progress=0,
             generation_error="",
             generation_job_id=job.id,
+            generation_synthesis_source=str(job.metadata.get("synthesis_source") or "taigi"),
             generation_updated_at=time.time(),
         )
     elif job.kind == "segment_regeneration":
@@ -1061,6 +1167,13 @@ def enqueue_retry_job(job: Job, priority: int) -> tuple[Job, Optional[CreateJobR
         source_job = app_data["jobs"].get(source_job_id)
         if source_job.status != "complete":
             raise HTTPException(status_code=409, detail={"message": "原始工作必須完成，才能重新執行分段重生。"})
+    elif job.kind == "audio_review":
+        source_job_id = str(job.metadata.get("source_job_id") or "")
+        if not source_job_id:
+            raise HTTPException(status_code=400, detail={"message": "這筆音訊校對工作缺少原始工作資訊，無法重新執行。"})
+        source_job = app_data["jobs"].get(source_job_id)
+        if source_job.status != "complete":
+            raise HTTPException(status_code=409, detail={"message": "原始工作必須完成，才能重新執行音訊校對。"})
     else:
         raise HTTPException(status_code=400, detail={"message": "這種工作類型無法重新執行。"})
 
@@ -1133,11 +1246,17 @@ def enqueue_word_generation_job(
     *,
     auto: bool = False,
     priority: int = 5,
+    synthesis_source: str = "taigi",
 ) -> tuple[dict, Optional[Job]]:
     db = load_word_db()
     word = db.get("words", {}).get(word_id)
     if not word:
         raise HTTPException(status_code=404, detail={"message": "找不到這個詞語。"})
+    if not is_lexicon_material(str(word.get("source") or "")):
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "這段內容太長，不適合當作語詞或固定語句產生語音。請改選較短的詞語。"},
+        )
     if word.get("generation_status") in {"queued", "running"} or word_has_active_generation(word_id):
         active_job_id = word.get("generation_job_id", "")
         active_job = app_data["jobs"].get(active_job_id) if active_job_id else None
@@ -1145,6 +1264,7 @@ def enqueue_word_generation_job(
     now = time.time()
     job_id = uuid.uuid4().hex
     requester_name = requester_name or reviewer_display_name(requester_id) or "匿名使用者"
+    synthesis_source = synthesis_source if synthesis_source in {"taigi", "tailo"} else "taigi"
     word.update({
         "generation_status": "queued",
         "generation_stage": "已排入主工作佇列",
@@ -1154,6 +1274,7 @@ def enqueue_word_generation_job(
         "generation_requester_id": requester_id,
         "generation_requester_name": requester_name,
         "generation_auto": auto,
+        "generation_synthesis_source": synthesis_source,
         "generation_updated_at": now,
         "updated_at": now,
     })
@@ -1181,6 +1302,7 @@ def enqueue_word_generation_job(
             "requester_id": requester_id,
             "requester_name": requester_name,
             "auto": auto,
+            "synthesis_source": synthesis_source,
         },
     )
     app_data["jobs"].add(job)
@@ -1213,7 +1335,8 @@ def schedule_one_missing_word_asset() -> Optional[Job]:
     candidates = [
         word
         for word in db.get("words", {}).values()
-        if not word_has_generated_asset(word)
+        if is_lexicon_material(str(word.get("source") or ""))
+        and not word_has_generated_asset(word)
         and word.get("generation_status") not in {"queued", "running"}
         and not word_has_active_generation(word.get("id", ""))
     ]
@@ -1266,6 +1389,8 @@ def run_word_asset_job(job_id: str):
         settings = load_settings()
         requester_id = word.get("generation_requester_id", "")
         requester_name = word.get("generation_requester_name", "") or reviewer_display_name(requester_id)
+        synthesis_source = str(job.metadata.get("synthesis_source") or word.get("generation_synthesis_source") or "taigi")
+        word["generation_synthesis_source"] = synthesis_source if synthesis_source in {"taigi", "tailo"} else "taigi"
         jobs.update(job_id, stage="Synthesizing word audio", progress=45)
         generated, asset = generate_word_asset_variant(
             word,
@@ -1284,6 +1409,7 @@ def run_word_asset_job(job_id: str):
             "generation_progress": 100,
             "generation_error": "",
             "generation_job_id": job_id,
+            "generation_synthesis_source": "",
             "generation_updated_at": time.time(),
             "updated_at": time.time(),
         })
@@ -1303,7 +1429,7 @@ def run_word_asset_job(job_id: str):
             video_path=asset.get("video_path"),
             taigi_text=generated.get("taigi", ""),
             tailo_text=generated.get("tailo", ""),
-            metadata={**job.metadata, "asset_id": asset.get("id")},
+            metadata={**job.metadata, "asset_id": asset.get("id"), "synthesis_text": asset.get("synthesis_text"), "synthesis_source": asset.get("synthesis_source")},
         )
     except Exception as exc:
         completed_at = time.time()
@@ -1336,10 +1462,9 @@ def run_segment_regeneration_job(job_id: str):
         source_job = jobs.get(source_job_id)
         if source_job.status != "complete":
             raise ValueError("Only completed source jobs can regenerate segments.")
-        output_dir = Path(source_job.output_dir or JOB_ROOT / source_job_id / "output")
-        segments_path = output_dir / "segments.json"
-        if not state_json_exists(segments_path):
-            raise FileNotFoundError("Source segments.json not found.")
+        segments_payload = ensure_job_segments_payload(source_job)
+        if not segments_payload:
+            raise FileNotFoundError("Source segments.json not found and could not be repaired.")
 
         replacement_rows = job.metadata.get("replacements") or []
         replacements: dict[int, dict[str, str]] = {}
@@ -1359,7 +1484,6 @@ def run_segment_regeneration_job(job_id: str):
             raise ValueError("No segment replacements queued.")
 
         jobs.update(job_id, status="running", stage="Loading source segments", progress=5, started_at=started_at)
-        segments_payload = load_state_json_file(segments_path, {"segments": []})
 
         def update_progress(stage: str, progress: int):
             jobs.update(job_id, stage=stage, progress=progress)
@@ -1447,6 +1571,219 @@ def run_maintenance_job(job_id: str):
         )
 
 
+def edit_distance(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    previous = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        current = [i]
+        for j, cb in enumerate(b, start=1):
+            current.append(min(
+                previous[j] + 1,
+                current[j - 1] + 1,
+                previous[j - 1] + (0 if ca == cb else 1),
+            ))
+        previous = current
+    return previous[-1]
+
+
+def compare_text_similarity(reference: str, hypothesis: str) -> dict:
+    ref = re.sub(r"\s+", "", sanitize_text_for_tts(reference or ""))
+    hyp = re.sub(r"\s+", "", sanitize_text_for_tts(hypothesis or ""))
+    if not ref:
+        return {"cer": None, "similarity": None, "edit_distance": 0, "reference_length": 0}
+    distance = edit_distance(ref, hyp)
+    cer = round(distance / max(1, len(ref)), 4)
+    return {
+        "cer": cer,
+        "similarity": round(max(0.0, 1.0 - cer), 4),
+        "edit_distance": distance,
+        "reference_length": len(ref),
+    }
+
+
+def model_dependency_status() -> dict:
+    status = {}
+    for name in ("transformers", "torch", "soundfile"):
+        try:
+            module = __import__(name)
+            status[name] = {"available": True, "version": str(getattr(module, "__version__", ""))}
+        except Exception as exc:
+            status[name] = {"available": False, "error": str(exc)}
+    return status
+
+
+def breeze_asr_transcribe(audio_path: Path) -> tuple[str, dict]:
+    if not ENABLE_BREEZE_ASR:
+        return "", {"available": False, "reason": "TAIGI_WEB_ENABLE_BREEZE_ASR is not enabled", "model": BREEZE_ASR_MODEL}
+    try:
+        from transformers import pipeline
+    except Exception as exc:
+        return "", {"available": False, "reason": f"transformers unavailable: {exc}", "model": BREEZE_ASR_MODEL}
+    try:
+        pipe = pipeline("automatic-speech-recognition", model=BREEZE_ASR_MODEL)
+        result = pipe(str(audio_path))
+        if isinstance(result, dict):
+            return str(result.get("text") or "").strip(), {"available": True, "model": BREEZE_ASR_MODEL}
+        return str(result or "").strip(), {"available": True, "model": BREEZE_ASR_MODEL}
+    except Exception as exc:
+        return "", {"available": False, "reason": str(exc), "model": BREEZE_ASR_MODEL}
+
+
+def mms_tts_generate(text: str, output_path: Path) -> dict:
+    if not ENABLE_MMS_TTS:
+        return {"available": False, "reason": "TAIGI_WEB_ENABLE_MMS_TTS is not enabled", "model": MMS_TTS_MODEL}
+    try:
+        from transformers import pipeline
+        import soundfile as sf
+    except Exception as exc:
+        return {"available": False, "reason": f"TTS dependencies unavailable: {exc}", "model": MMS_TTS_MODEL}
+    try:
+        pipe = pipeline("text-to-speech", model=MMS_TTS_MODEL)
+        result = pipe(text)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        sf.write(output_path, result["audio"], result["sampling_rate"])
+        return {"available": True, "model": MMS_TTS_MODEL, "audio_file": output_path.name}
+    except Exception as exc:
+        return {"available": False, "reason": str(exc), "model": MMS_TTS_MODEL}
+
+
+def latest_audio_review_payload(job: Job) -> dict:
+    output_dir = output_dir_for_job(job)
+    path = output_dir / "audio_review.json"
+    if state_json_exists(path):
+        return load_state_json_file(path, {})
+    return {}
+
+
+def latest_audio_review_for_segment(job: Job, segment_index: int) -> dict:
+    payload = latest_audio_review_payload(job)
+    for item in payload.get("segments") or []:
+        if int(item.get("index") or 0) == segment_index:
+            return item
+    return {}
+
+
+def run_audio_review_job(job_id: str):
+    jobs: JobStore = app_data["jobs"]
+    job = jobs.get(job_id)
+    source_job_id = str(job.metadata.get("source_job_id") or "")
+    source_job = app_data["jobs"].get(source_job_id)
+    started_at = time.time()
+    output_dir = JOB_ROOT / job_id / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        if source_job.status != "complete":
+            raise ValueError("Source job must be complete before audio review.")
+        segments_payload = ensure_job_segments_payload(source_job)
+        if not segments_payload:
+            raise FileNotFoundError("Source segments.json not found.")
+        source_output_dir = output_dir_for_job(source_job)
+        run_asr = bool(job.metadata.get("run_asr", True))
+        generate_mms = bool(job.metadata.get("generate_mms", False))
+        provider_status = {
+            "breeze_asr": {"enabled": ENABLE_BREEZE_ASR, "model": BREEZE_ASR_MODEL},
+            "mms_tts": {"enabled": ENABLE_MMS_TTS, "model": MMS_TTS_MODEL},
+            "dependencies": model_dependency_status(),
+            "license": {
+                "breeze_asr": "Apache-2.0; allowed for audio review and automated comparison with attribution.",
+                "mms_tts_nan": "CC-BY-NC-4.0; non-commercial comparison only, not for commercial output.",
+            },
+        }
+        reviewed_segments = []
+        segments = sorted(segments_payload.get("segments", []), key=lambda item: int(item.get("index") or 0))
+        total = max(1, len(segments))
+        for position, segment in enumerate(segments, start=1):
+            idx = int(segment.get("index") or position)
+            jobs.update(job_id, status="running", stage=f"Reviewing audio segment {position}/{total}", progress=10 + int(position / total * 75), started_at=started_at)
+            taigi_text = str(segment.get("corrected_taigi_text") or segment.get("taigi_text") or "").strip()
+            tailo_text = str(segment.get("corrected_tailo_text") or segment.get("tailo_text") or "").strip()
+            source_text = str(segment.get("source_text") or "").strip()
+            audio_path = source_output_dir / "segments" / f"seg_{idx:02d}.wav"
+            transcript = ""
+            asr_status = {"available": False, "reason": "ASR not requested", "model": BREEZE_ASR_MODEL}
+            if run_asr and audio_path.exists():
+                transcript, asr_status = breeze_asr_transcribe(audio_path)
+            comparison = compare_text_similarity(source_text, transcript) if transcript else {
+                "cer": None,
+                "similarity": None,
+                "edit_distance": None,
+                "reference_length": len(re.sub(r"\s+", "", source_text)),
+            }
+            issues = []
+            if not audio_path.exists():
+                issues.append("segment_audio_missing")
+            if transcript and comparison.get("cer") is not None and comparison["cer"] > 0.35:
+                issues.append("high_asr_cer")
+            if not transcript:
+                issues.append("asr_unavailable_or_empty")
+            mms_status = {"available": False, "reason": "MMS comparison not requested", "model": MMS_TTS_MODEL}
+            if generate_mms:
+                mms_text = tailo_text or taigi_text
+                if mms_text:
+                    mms_status = mms_tts_generate(mms_text, output_dir / "mms" / f"seg_{idx:02d}.wav")
+                else:
+                    mms_status = {"available": False, "reason": "No Tailo or Taigi text for MMS comparison", "model": MMS_TTS_MODEL}
+            reviewed_segments.append({
+                "index": idx,
+                "source_text": source_text,
+                "expected_taigi_text": taigi_text,
+                "expected_tailo_text": tailo_text,
+                "reference_text": source_text,
+                "asr_transcript": transcript,
+                "comparison": comparison,
+                "issues": issues,
+                "asr_status": asr_status,
+                "mms_status": mms_status,
+                "reviewed_at": time.time(),
+            })
+        completed_at = time.time()
+        scores = [item["comparison"]["similarity"] for item in reviewed_segments if item.get("comparison", {}).get("similarity") is not None]
+        report = {
+            "version": 1,
+            "source_job_id": source_job.id,
+            "review_job_id": job_id,
+            "created_at": completed_at,
+            "providers": provider_status,
+            "summary": {
+                "segment_count": len(reviewed_segments),
+                "average_similarity": round(sum(scores) / len(scores), 4) if scores else None,
+                "issue_count": sum(len(item.get("issues") or []) for item in reviewed_segments),
+                "asr_ready": bool(ENABLE_BREEZE_ASR and provider_status["dependencies"].get("transformers", {}).get("available")),
+                "mms_ready": bool(ENABLE_MMS_TTS and provider_status["dependencies"].get("transformers", {}).get("available") and provider_status["dependencies"].get("soundfile", {}).get("available")),
+            },
+            "segments": reviewed_segments,
+        }
+        save_state_json_file(output_dir / "audio_review.json", report)
+        save_state_json_file(source_output_dir / "audio_review.json", report)
+        jobs.update(
+            job_id,
+            status="complete",
+            stage="Complete",
+            progress=100,
+            completed_at=completed_at,
+            elapsed_seconds=round(completed_at - started_at, 3),
+            output_dir=str(output_dir),
+            metadata={**job.metadata, "summary": report["summary"]},
+        )
+        record_stat_action("audio_review_complete", "job", source_job.id, metadata=report["summary"])
+    except Exception as exc:
+        completed_at = time.time()
+        jobs.update(
+            job_id,
+            status="failed",
+            stage="Failed",
+            progress=100,
+            error=str(exc),
+            completed_at=completed_at,
+            elapsed_seconds=round(completed_at - started_at, 3),
+        )
+
+
 def job_worker():
     while True:
         _, _, job_id, payload = job_queue.get()
@@ -1458,6 +1795,8 @@ def job_worker():
                 run_segment_regeneration_job(job_id)
             elif job and job.kind == "maintenance":
                 run_maintenance_job(job_id)
+            elif job and job.kind == "audio_review":
+                run_audio_review_job(job_id)
             elif payload:
                 run_job(job_id, payload)
         finally:
@@ -1926,7 +2265,8 @@ def public_rate_limit_state(request: Request) -> dict:
         "wait_seconds": int(remaining),
         "can_submit": remaining <= 0,
         "next_available_at": last + limit_seconds if remaining > 0 else now,
-        "sentence_limit": 1,
+        "sentence_limit": None,
+        "max_chars": PUBLIC_ANONYMOUS_MAX_CHARS,
     }
 
 
@@ -1946,11 +2286,12 @@ def enforce_public_rate_limit(request: Request, text: str):
     if is_private_client(request):
         return
     rate_state = public_rate_limit_state(request)
-    if sentence_count(text) > 1:
+    text_length = len(sanitize_text_for_tts(text).strip())
+    if text_length > PUBLIC_ANONYMOUS_MAX_CHARS:
         raise HTTPException(
             status_code=429,
             detail={
-                "message": "未登入使用者每次只能送出一句。",
+                "message": f"未登入使用者每次最多可以送出 {PUBLIC_ANONYMOUS_MAX_CHARS} 個字。",
                 "rate_limit": rate_state,
                 "queue": queue_status(),
             },
@@ -1990,6 +2331,16 @@ def enforce_login_rate_limit(request: Request):
         rate_limit_seen[key] = now
 
 
+def bearer_token_from_request(request: Request, authorization: Optional[str] = None) -> str:
+    header = authorization or request.headers.get("authorization", "")
+    return header[7:].strip() if header.lower().startswith("bearer ") else ""
+
+
+def session_token_email(request: Request, authorization: Optional[str] = None) -> Optional[str]:
+    bearer = bearer_token_from_request(request, authorization)
+    return session_email(bearer) if bearer else None
+
+
 def is_authorized(
     request: Request,
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
@@ -1998,9 +2349,11 @@ def is_authorized(
     admin_session = request.cookies.get(ADMIN_SESSION_COOKIE)
     if admin_session and session_email(admin_session) == ADMIN_EMAIL:
         return True
+    if session_token_email(request, authorization) == ADMIN_EMAIL:
+        return True
     token = web_token()
     if token:
-        bearer = authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else ""
+        bearer = bearer_token_from_request(request, authorization)
         return taigi_web_token_cookie == token or bearer == token
     settings_token = load_settings().api_access_token.strip()
     if settings_token and authorization and authorization.lower().startswith("bearer "):
@@ -2011,7 +2364,8 @@ def is_authorized(
 
 def authenticated_email(request: Request) -> Optional[str]:
     session = request.cookies.get(ADMIN_SESSION_COOKIE)
-    return session_email(session) if session else None
+    cookie_email = session_email(session) if session else None
+    return cookie_email or session_token_email(request)
 
 
 def is_authenticated(request: Request) -> bool:
@@ -2302,7 +2656,7 @@ def job_rating_summary(job: Job, user_id: str = "") -> dict:
 def job_sort_score(job: Job) -> tuple:
     rating = job_rating_summary(job)["rating_average"] or 0
     plays = job_play_summary(job.id)["play_count"]
-    return (rating, plays, job.updated_at)
+    return (1 if job.featured_at else 0, job.featured_at or 0, rating, plays, job.updated_at)
 
 
 def present_job(job: Job, admin: bool, user_id: str = ""):
@@ -2344,10 +2698,172 @@ def source_job_for_segment_regeneration(job: Job) -> Job:
     return app_data["jobs"].get(source_job_id)
 
 
+def output_dir_for_job(job: Job) -> Path:
+    return Path(job.output_dir or JOB_ROOT / job.id / "output")
+
+
+def static_segments_path_for_job(job: Job) -> Path:
+    return PUBLIC_STATIC_DIR / "public" / "media" / "jobs" / job.id / "segments.json"
+
+
+def split_stored_lines(text: str, fallback_max_chars: int = 90) -> list[str]:
+    text = sanitize_text_for_tts(text or "").strip()
+    if not text:
+        return []
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) > 1:
+        return lines
+    return split_segments(text, fallback_max_chars)
+
+
+def build_recovered_segments_from_job(job: Job) -> list[dict]:
+    payload = job.metadata.get("create_payload") if isinstance(job.metadata, dict) else {}
+    max_chars = 90
+    if isinstance(payload, dict):
+        try:
+            max_chars = int(payload.get("max_chars_per_segment") or max_chars)
+        except Exception:
+            max_chars = 90
+    source_segments = split_stored_lines(job.chinese_text, max_chars)
+    taigi_segments = split_stored_lines(job.taigi_text, max_chars)
+    tailo_segments = split_stored_lines(job.tailo_text, max_chars)
+    total = max(len(source_segments), len(taigi_segments), len(tailo_segments), int(job.segment_count or 0))
+    segments = []
+    for idx in range(total):
+        taigi_text = taigi_segments[idx] if idx < len(taigi_segments) else ""
+        tailo_text = tailo_segments[idx] if idx < len(tailo_segments) else ""
+        if taigi_text and not tailo_text:
+            tailo_text = tailo_for(taigi_text)
+        segments.append({
+            "index": idx + 1,
+            "source_text": source_segments[idx] if idx < len(source_segments) else "",
+            "taigi_text": taigi_text,
+            "tailo_text": tailo_text,
+            "audio_file": f"segments/seg_{idx + 1:02d}.wav",
+            "rating": None,
+            "feedback_count": 0,
+            "recovered": True,
+            "recovered_at": time.time(),
+        })
+    return segments
+
+
+def ensure_job_segments_payload(job: Job, *, repair: bool = True) -> Optional[dict]:
+    output_dir = output_dir_for_job(job)
+    segments_path = output_dir / "segments.json"
+    if state_json_exists(segments_path):
+        payload = load_state_json_file(segments_path, {"segments": []})
+        if payload.get("segments"):
+            return payload
+    if not repair:
+        return None
+
+    static_path = static_segments_path_for_job(job)
+    if static_path.exists():
+        try:
+            payload = json.loads(static_path.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {"segments": []}
+        if payload.get("segments"):
+            save_state_json_file(segments_path, payload)
+            return payload
+
+    segments = build_recovered_segments_from_job(job)
+    if segments:
+        payload = {"segments": segments, "recovered": True, "recovered_at": time.time()}
+        save_state_json_file(segments_path, payload)
+        app_data["jobs"].update(
+            job.id,
+            segment_count=len(segments),
+            stage=job.stage,
+            progress=job.progress,
+        )
+        record_stat_action("repair_segments", "job", job.id, metadata={"segment_count": len(segments)})
+        return payload
+    return None
+
+
 def content_disposition(filename: str) -> str:
     encoded = quote(filename, safe="")
     ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "-", filename).strip(".-") or "download"
     return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded}'
+
+
+def clean_download_name(value: str, fallback: str = "download", limit: int = 90) -> str:
+    value = sanitize_text_for_tts(value or "")
+    value = re.sub(r"[\r\n\t]+", " ", value)
+    value = re.sub(r"[\\/:*?\"<>|]+", "-", value)
+    value = re.sub(r"\s+", " ", value).strip(" .-_")
+    if not value:
+        value = fallback
+    return value[:limit].strip(" .-_") or fallback
+
+
+def download_filename(base: str, suffix: str, fallback: str = "download") -> str:
+    suffix = suffix if suffix.startswith(".") else f".{suffix}"
+    return f"{clean_download_name(base, fallback=fallback)}{suffix}"
+
+
+def job_download_base(job: Job, kind: str) -> str:
+    if job.kind == "word_asset" and (job.tailo_text or job.taigi_text):
+        return job.tailo_text or tailo_for(job.taigi_text) or job.taigi_text
+    first_sentence = title_from_text(job.chinese_text or job.title, limit=72)
+    if kind in {"audio", "video", "zip"}:
+        return first_sentence
+    if kind == "tailo":
+        return title_from_text(job.tailo_text or first_sentence, limit=72)
+    if kind == "taigi":
+        return title_from_text(job.taigi_text or first_sentence, limit=72)
+    return first_sentence
+
+
+def job_download_filename(job: Job, kind: str, path: Path) -> str:
+    suffix = path.suffix or {
+        "zip": ".zip",
+        "audio": ".wav",
+        "video": ".mp4",
+        "taigi": ".txt",
+        "tailo": ".txt",
+        "subtitles": ".json",
+        "segments": ".json",
+    }.get(kind, ".dat")
+    label = {
+        "zip": "",
+        "audio": "音訊",
+        "video": "影片",
+        "taigi": "台語稿",
+        "tailo": "台羅",
+        "subtitles": "字幕",
+        "segments": "分段",
+    }.get(kind, kind)
+    base = job_download_base(job, kind)
+    return download_filename(f"{base}-{label}" if label else base, suffix, fallback=f"job-{job.id}-{kind}")
+
+
+def segment_download_filename(job: Job, segment_index: int, output_dir: Path, path: Path) -> str:
+    segment = {}
+    segments_path = output_dir / "segments.json"
+    if state_json_exists(segments_path):
+        payload = load_state_json_file(segments_path, {"segments": []})
+        segment = next(
+            (item for item in payload.get("segments", []) if int(item.get("index") or 0) == segment_index),
+            {},
+        )
+    taigi_text = str(segment.get("taigi_text") or "").strip()
+    base = (
+        str(segment.get("tailo_text") or "").strip()
+        or (tailo_for(taigi_text) if taigi_text else "")
+        or str(segment.get("source_text") or "").strip()
+        or f"{job.title} segment {segment_index}"
+    )
+    return download_filename(f"{base}-seg-{segment_index:02d}", path.suffix or ".wav", fallback=f"{job.id}-seg-{segment_index:02d}")
+
+
+def word_download_filename(word: dict, kind: str, path: Path) -> str:
+    taigi_text = str(word.get("taigi") or "").strip()
+    base = str(word.get("tailo") or "").strip() or (tailo_for(taigi_text) if taigi_text else "") or str(word.get("source") or "").strip()
+    label = "音訊" if kind == "audio" else "影片"
+    return download_filename(f"{base}-{label}", path.suffix or (".wav" if kind == "audio" else ".mp4"), fallback=f"{word.get('id') or 'word'}-{kind}")
 
 
 def file_inventory() -> dict:
@@ -2427,6 +2943,7 @@ def public_media_for_word(word: dict) -> dict:
 def public_word_entry(word: dict, stats_words: dict, user_id: str = "") -> dict:
     ratings = word_rating_summary(word, user_id)
     generation = word_generation_status(word)
+    token_summary = word_token_review_summary(word)
     word_db = load_word_db()
     token_statuses = word_token_review_statuses(word, user_id)
     source_tokens = segment_token_entries(str(word.get("source") or ""), word_db)
@@ -2449,10 +2966,13 @@ def public_word_entry(word: dict, stats_words: dict, user_id: str = "") -> dict:
         "video_play_count": int(stats_words.get(word.get("id", ""), {}).get("video_plays") or 0),
         **ratings,
         "problem": bool(word.get("problem")),
+        "problem_type": word.get("problem_type", ""),
         "problem_reason": word.get("problem_reason", ""),
         "has_audio": bool(word.get("has_audio")),
         "has_video": bool(word.get("has_video")),
         "assets": public_word_assets(word, user_id),
+        "itaigi_reference": word.get("itaigi_reference", {}),
+        **token_summary,
         "source_tokens": source_tokens,
         "multilingual": word.get("multilingual", {}),
         "multilingual_request_count": len(word.get("multilingual_requests") or []),
@@ -2517,6 +3037,34 @@ def word_token_review_statuses(word: dict, user_id: str) -> dict[str, str]:
     return statuses
 
 
+def word_token_review_summary(word: dict) -> dict:
+    token_reviews = word.get("token_reviews") or {}
+    latest_by_source: dict[str, dict] = {}
+    if isinstance(token_reviews, dict):
+        for review_set in token_reviews.values():
+            if not isinstance(review_set, dict):
+                continue
+            for source, item in review_set.items():
+                if not isinstance(item, dict):
+                    continue
+                status = item.get("status")
+                if status not in {"problem", "ok"}:
+                    continue
+                updated_at = float(item.get("updated_at") or item.get("created_at") or 0)
+                previous = latest_by_source.get(str(source))
+                if previous is None or updated_at >= float(previous.get("updated_at") or 0):
+                    latest_by_source[str(source)] = {"status": status, "updated_at": updated_at}
+    problem_sources = sorted(source for source, item in latest_by_source.items() if item.get("status") == "problem")
+    ok_sources = sorted(source for source, item in latest_by_source.items() if item.get("status") == "ok")
+    return {
+        "token_review_count": len(latest_by_source),
+        "token_problem_count": len(problem_sources),
+        "token_ok_count": len(ok_sources),
+        "token_problem_sources": problem_sources,
+        "token_ok_sources": ok_sources,
+    }
+
+
 def public_jobs_snapshot() -> dict:
     jobs = [
         job for job in app_data["jobs"].list()
@@ -2536,6 +3084,8 @@ def public_words_snapshot() -> dict:
     stats_words = load_stats().get("words", {})
     words = []
     for word in db.get("words", {}).values():
+        if not is_lexicon_material(str(word.get("source") or "")):
+            continue
         item = public_word_entry(word, stats_words)
         item["static_media"] = public_media_for_word(word)
         words.append(item)
@@ -2553,7 +3103,7 @@ def public_words_snapshot() -> dict:
 
 def source_license_snapshot() -> dict:
     return {
-        "title": "Source and License Governance Ledger",
+        "title": "Data Sources and Licenses",
         "version": 1,
         "updated_at": time.time(),
         "policy": {
@@ -2572,8 +3122,11 @@ def source_license_snapshot() -> dict:
             {"name": "FFmpeg / FFprobe", "license": "GPL-3.0-or-later build", "status": "confirm_before_distribution", "links": ["https://ffmpeg.org/", "https://ffmpeg.org/legal.html", "https://formulae.brew.sh/formula/ffmpeg"]},
             {"name": "SQLite / PostgreSQL", "license": "public domain / PostgreSQL License", "status": "allowed_dependency", "links": ["https://www.sqlite.org/copyright.html", "https://www.postgresql.org/about/licence/"]},
             {"name": "User contributed lexicon", "license": "site terms required", "status": "first_party_or_user_contributed"},
+            {"name": "MediaTek Research Breeze-ASR-26", "license": "Apache-2.0", "status": "allowed_dependency_for_audio_review", "links": ["https://huggingface.co/MediaTek-Research/Breeze-ASR-26", "https://huggingface.co/papers/2603.19259"]},
+            {"name": "Meta MMS-TTS Chinese Min Nan (nan)", "license": "CC-BY-NC-4.0", "status": "noncommercial_comparison_only", "links": ["https://huggingface.co/facebook/mms-tts-nan", "https://huggingface.co/facebook/mms-tts"]},
             {"name": "MOE Taiwanese Taigi dictionary", "license": "pending review", "status": "confirm_before_import", "links": ["https://sutian.moe.edu.tw/"]},
-            {"name": "ChhoeTaigi / iTaigi community resources", "license": "dataset-level review required", "status": "confirm_before_import", "links": ["https://chhoe.taigi.info/", "https://itaigi.tw/", "https://github.com/ChhoeTaigi/ChhoeTaigiDatabase"]},
+            {"name": "iTaigi crowd Taigi dictionary", "license": "MIT project / CC0 database terms referenced by service terms", "status": "manual_reference_before_import", "links": ["https://github.com/i3thuan5/itaigi", "https://itaigi.tw/", "https://creativecommons.org/publicdomain/zero/1.0/", "http://docs.tai5uan5gian5gi2phing5thai5.apiary.io/#"]},
+            {"name": "ChhoeTaigi community resources", "license": "dataset-level review required", "status": "confirm_before_import", "links": ["https://chhoe.taigi.info/", "https://github.com/ChhoeTaigi/ChhoeTaigiDatabase"]},
         ],
     }
 
@@ -2628,7 +3181,10 @@ def public_stats() -> dict:
     stats = load_stats()
     jobs = app_data["jobs"].list()
     word_db = load_word_db()
-    words = list(word_db.get("words", {}).values())
+    words = [
+        word for word in word_db.get("words", {}).values()
+        if is_lexicon_material(str(word.get("source") or ""))
+    ]
     completed_jobs = [job for job in jobs if job.status == "complete"]
     inventory = file_inventory()
     word_entries_rated = sum(1 for word in words if int(word_rating_summary(word).get("rating_count") or 0) > 0)
@@ -2636,10 +3192,32 @@ def public_stats() -> dict:
     word_assets_total = len(word_assets)
     word_assets_rated = sum(1 for asset in word_assets if int(asset.get("rating_count") or 0) > 0)
     word_assets_problem = sum(1 for word in words if word.get("problem"))
+    word_token_summaries = [word_token_review_summary(word) for word in words]
     word_asset_jobs = [job for job in jobs if job.kind == "word_asset"]
+    audio_review_jobs = [job for job in jobs if job.kind == "audio_review"]
     actions = stats.get("actions", {})
     today_actions = stats.get("daily", {}).get(stats_day_key(), {}).get("actions", {})
     source_exports = source_export_summary()
+    job_problem_count = sum(1 for job in completed_jobs if job.problem)
+    job_chinese_voice_count = sum(1 for job in completed_jobs if job.problem and job.problem_type == "chinese_voice_not_taigi")
+    job_ok_count = sum(
+        1 for job in completed_jobs
+        if not job.problem and job.problem_reported_at is not None and str(job.problem_reported_by or "").strip()
+    )
+    job_reviewed_count = job_problem_count + job_ok_count
+    job_unreviewed_count = max(0, len(completed_jobs) - job_reviewed_count)
+    job_quality = {
+        "completed_total": len(completed_jobs),
+        "reviewed_total": job_reviewed_count,
+        "problem_count": job_problem_count,
+        "chinese_voice_not_taigi_count": job_chinese_voice_count,
+        "ok_count": job_ok_count,
+        "unreviewed_count": job_unreviewed_count,
+        "problem_rate": round(job_problem_count / job_reviewed_count, 4) if job_reviewed_count else 0,
+        "ok_rate": round(job_ok_count / job_reviewed_count, 4) if job_reviewed_count else 0,
+        "reviewed_rate": round(job_reviewed_count / len(completed_jobs), 4) if completed_jobs else 0,
+        "unreviewed_rate": round(job_unreviewed_count / len(completed_jobs), 4) if completed_jobs else 0,
+    }
 
     def empty_rating_buckets() -> dict[str, int]:
         return {str(score): 0 for score in range(1, 6)}
@@ -2657,6 +3235,21 @@ def public_stats() -> dict:
     for asset in word_assets:
         add_average_rating_bucket(word_asset_rating_buckets, asset.get("rating_average"))
 
+    segment_token_problem_count = 0
+    segment_token_ok_count = 0
+    for job in jobs:
+        try:
+            reviews = load_reviews(job)
+        except Exception:
+            continue
+        for review in reviews:
+            for correction in review.get("corrections") or []:
+                status = str(correction.get("status") or "").strip()
+                if status == "problem":
+                    segment_token_problem_count += 1
+                elif status == "ok":
+                    segment_token_ok_count += 1
+
     lexicon_quality = {
         "word_entries_total": len(words),
         "word_entries_rated": word_entries_rated,
@@ -2668,6 +3261,12 @@ def public_stats() -> dict:
         "word_asset_rating_buckets": word_asset_rating_buckets,
         "word_problem_count": word_assets_problem,
         "word_problem_rate": round(word_assets_problem / len(words), 4) if words else 0,
+        "word_token_reviewed_entries": sum(1 for item in word_token_summaries if int(item.get("token_review_count") or 0) > 0),
+        "word_token_problem_entries": sum(1 for item in word_token_summaries if int(item.get("token_problem_count") or 0) > 0),
+        "word_token_problem_count": sum(int(item.get("token_problem_count") or 0) for item in word_token_summaries),
+        "word_token_ok_count": sum(int(item.get("token_ok_count") or 0) for item in word_token_summaries),
+        "segment_token_problem_count": segment_token_problem_count,
+        "segment_token_ok_count": segment_token_ok_count,
         "word_regeneration_requests": int(actions.get("create_word_asset_job") or 0),
         "word_regeneration_complete": sum(1 for job in word_asset_jobs if job.status == "complete"),
         "word_regeneration_queued": sum(1 for job in word_asset_jobs if job.status == "queued"),
@@ -2679,6 +3278,11 @@ def public_stats() -> dict:
         "word_queries_total": sum(int(item.get("count") or 0) for item in word_db.get("queries", {}).values()),
         "word_assets_with_audio": sum(1 for asset in word_assets if asset.get("has_audio")),
         "word_assets_with_video": sum(1 for asset in word_assets if asset.get("has_video")),
+        "audio_review_requests": len(audio_review_jobs),
+        "audio_review_complete": sum(1 for job in audio_review_jobs if job.status == "complete"),
+        "audio_review_queued": sum(1 for job in audio_review_jobs if job.status == "queued"),
+        "audio_review_running": sum(1 for job in audio_review_jobs if job.status == "running"),
+        "audio_review_failed": sum(1 for job in audio_review_jobs if job.status == "failed"),
     }
     return {
         **inventory,
@@ -2695,6 +3299,7 @@ def public_stats() -> dict:
         "page_visits_total": int(actions.get("page_visit") or 0),
         "page_visits_today": int(today_actions.get("page_visit") or 0),
         "source_exports": source_exports,
+        "job_quality": job_quality,
         "lexicon_quality": lexicon_quality,
         "actions": actions,
         "daily": [
@@ -2789,8 +3394,32 @@ def apply_translation_memory(text: str) -> str:
     return text
 
 
+def upsert_translation_memory_term(source: str, taigi: str, tailo: str = "", *, note: str = "", actor: str = "system") -> dict:
+    source = source.strip()
+    taigi = taigi.strip()
+    if not source or not taigi:
+        raise HTTPException(status_code=400, detail={"message": "請提供搜尋詞與台語替換詞。"})
+    memory = load_translation_memory()
+    terms = memory.setdefault("terms", {})
+    now = time.time()
+    entry = terms.setdefault(source, {"source": source, "taigi": "", "tailo": "", "count": 0})
+    entry.update({
+        "source": source,
+        "taigi": taigi,
+        "tailo": tailo.strip() or tailo_for(taigi),
+        "note": note.strip(),
+        "updated_at": now,
+        "updated_by": actor,
+    })
+    entry["count"] = int(entry.get("count") or 0) + 1
+    save_translation_memory(memory)
+    return entry
+
+
 PHRASE_MAP = [
     ("大家好", "逐家好"),
+    ("珍珠奶茶", "真珠奶茶"),
+    ("美元", "美金"),
     ("今天", "今仔日"),
     ("這個", "這个"),
     ("這一個", "這一个"),
@@ -2986,6 +3615,192 @@ def duration(path: Path) -> float:
     return float(output.strip())
 
 
+def word_tts_unit_count(text: str) -> int:
+    text = sanitize_text_for_tts(text).strip()
+    if re.search(r"[A-Za-zÀ-ÖØ-öø-ÿĀ-ž]", text):
+        parts = [
+            part
+            for part in re.split(r"[\s\-]+", text)
+            if re.search(r"[A-Za-zÀ-ÖØ-öø-ÿĀ-ž]", part)
+        ]
+        if parts:
+            return len(parts)
+    cleaned = re.sub(r"[\s，。！？、,.!?;；:：()（）「」『』\"'’-]+", "", text)
+    return len(cleaned)
+
+
+def is_short_word_tts(text: str) -> bool:
+    return word_tts_unit_count(text) <= 4
+
+
+def word_tts_text(text: str) -> str:
+    text = sanitize_text_for_tts(text).strip()
+    if not text:
+        return text
+    if is_short_word_tts(text) and not re.search(r"[。！？!?]$", text):
+        return f"{text}。"
+    return text
+
+
+def word_tts_control(text: str, voice_mode: str, voice_control: str) -> str:
+    # VoxCPM CLI encodes --control by prepending it to the synthesis text in
+    # parentheses. For 1-4 character words this often dominates the target and
+    # makes the model continue into a long sentence. In reference voice mode the
+    # reference audio already carries voice identity, so omit control for short words.
+    if is_short_word_tts(text) and voice_mode == "default":
+        return ""
+    if is_short_word_tts(text):
+        return "台灣台語，自然短詞，讀完就停"
+    return voice_control
+
+
+def max_word_audio_duration(text: str) -> float:
+    units = max(1, word_tts_unit_count(text))
+    if units <= 4:
+        return 2.5 + units
+    return min(20.0, max(6.5, units * 0.9 + 2.0))
+
+
+def synthesize_word_audio(
+    audio_path: Path,
+    text: str,
+    voice_mode: str,
+    voice_control: str,
+    device: str,
+    timesteps: int,
+    cfg_value: float,
+):
+    audio_path.parent.mkdir(parents=True, exist_ok=True)
+    reference_audio: Optional[Path] = None
+    if voice_mode == "default":
+        reference_audio = DEFAULT_REFERENCE_AUDIO.expanduser()
+    target_text = word_tts_text(text)
+    expected_max_duration = max_word_audio_duration(text)
+    attempts = [(target_text, word_tts_control(text, voice_mode, voice_control), min(cfg_value, 2.0), max(4, min(timesteps, 8)))]
+    if is_short_word_tts(text):
+        attempts.extend([
+            (target_text, "", 1.5, 4),
+            (sanitize_text_for_tts(text).strip(), "", 1.2, 4),
+        ])
+    errors: list[str] = []
+    for index, (attempt_text, attempt_control, attempt_cfg, attempt_steps) in enumerate(attempts, start=1):
+        tmp_path = audio_path.with_name(f"{audio_path.stem}.attempt{index}{audio_path.suffix}")
+        cmd = [
+            VOXCPM_BIN, "clone" if reference_audio else "design",
+            "--text", attempt_text,
+            "--output", str(tmp_path),
+            "--device", device,
+            "--cache-dir", str(CACHE_DIR),
+            "--no-denoiser",
+            "--local-files-only",
+            "--inference-timesteps", str(attempt_steps),
+            "--cfg-value", str(attempt_cfg),
+            "--retry-badcase",
+            "--retry-badcase-max-times", "3",
+        ]
+        if attempt_control:
+            cmd.extend(["--control", attempt_control])
+        if reference_audio and reference_audio.exists():
+            cmd.extend(["--reference-audio", str(reference_audio)])
+        try:
+            run(cmd)
+            generated_duration = duration(tmp_path)
+            if generated_duration <= expected_max_duration:
+                tmp_path.replace(audio_path)
+                return generated_duration
+            errors.append(f"attempt {index}: {generated_duration:.2f}s > {expected_max_duration:.2f}s")
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+    raise RuntimeError(f"詞語語音生成異常過長，已拒絕保存：{'; '.join(errors)}")
+
+
+def word_synthesis_text(word: dict) -> tuple[str, str]:
+    preferred = str(word.get("generation_synthesis_source") or word.get("preferred_synthesis_source") or "").strip()
+    if preferred == "taigi":
+        taigi_text = str(word.get("taigi") or "").strip()
+        if taigi_text:
+            return taigi_text, "taigi"
+    elif preferred == "tailo":
+        tailo_text = str(word.get("tailo") or "").strip()
+        if tailo_text:
+            return tailo_text, "tailo"
+    taigi_text = str(word.get("taigi") or "").strip()
+    if taigi_text:
+        return taigi_text, "taigi"
+    tailo_text = str(word.get("tailo") or "").strip()
+    return tailo_text, "tailo"
+
+
+def itaigi_hapsing_audio_url(tailo_text: str) -> str:
+    taibun = sanitize_text_for_tts(tailo_text or "").replace("/", " 。 ").strip()
+    if not taibun:
+        return ""
+    return f"https://hapsing.itaigi.tw/bangtsam?taibun={quote(taibun)}"
+
+
+def itaigi_audio_available(audio_url: str) -> bool:
+    if not audio_url:
+        return False
+    try:
+        req = urllib.request.Request(audio_url, method="HEAD")
+        with urllib.request.urlopen(req, timeout=8) as res:
+            return 200 <= int(getattr(res, "status", 0) or 0) < 400
+    except Exception:
+        return False
+
+
+def fetch_itaigi_references(query: str) -> dict:
+    query = re.sub(r"\s+", " ", sanitize_text_for_tts(query or "")).strip()
+    if not query:
+        raise HTTPException(status_code=400, detail={"message": "請先輸入要查詢的詞語。"})
+    api_url = f"https://itaigi.tw/{quote('平臺項目列表')}/{quote('揣列表')}?{urlencode({'關鍵字': query})}"
+    source_url = f"https://itaigi.tw/k/{quote(query)}"
+    try:
+        req = urllib.request.Request(api_url, headers={"User-Agent": "TaigiVoiceVideoWeb/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as res:
+            payload = json.loads(res.read().decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail={"message": f"無法查詢 iTaigi：{exc}"}) from exc
+
+    candidates = []
+    seen: set[tuple[str, str]] = set()
+    for row in payload.get("列表", []) or []:
+        for item in row.get("新詞文本", []) or []:
+            taigi_text = str(item.get("文本資料") or "").strip()
+            tailo_text = str(item.get("音標資料") or "").strip()
+            if not taigi_text and not tailo_text:
+                continue
+            key = (taigi_text, tailo_text)
+            if key in seen:
+                continue
+            seen.add(key)
+            good = int(item.get("按呢講好") or 0)
+            bad = int(item.get("按呢無好") or 0)
+            audio_url = itaigi_hapsing_audio_url(tailo_text)
+            candidates.append({
+                "id": str(item.get("新詞文本項目編號") or sha256(f"{taigi_text}\n{tailo_text}".encode("utf-8")).hexdigest()[:12]),
+                "taigi": taigi_text,
+                "tailo": tailo_text,
+                "contributor": str(item.get("貢獻者") or ""),
+                "good": good,
+                "bad": bad,
+                "score": good - bad,
+                "audio_url": audio_url,
+                "audio_available": itaigi_audio_available(audio_url),
+                "source_url": source_url,
+            })
+    candidates.sort(key=lambda item: (item["score"], item["good"], -item["bad"]), reverse=True)
+    return {
+        "source": "iTaigi",
+        "query": query,
+        "source_url": source_url,
+        "api_url": api_url,
+        "license_note": "iTaigi 作為人工參考來源；套用前仍保留來源網址與票數，避免未審核資料直接混入第一方詞庫而無來源紀錄。",
+        "candidates": candidates,
+    }
+
+
 def run(
     cmd: list[str],
     cwd: Path = ROOT,
@@ -3032,6 +3847,35 @@ def safe_word_id(source: str, taigi: str) -> str:
 
 def word_kind(source: str) -> str:
     return "phrase" if len(source) >= 4 else "word"
+
+
+LEXICON_MAX_COMPACT_CHARS = 36
+LEXICON_SENTENCE_MAX_COMPACT_CHARS = 24
+
+
+def lexicon_compact_source(source: str) -> str:
+    return re.sub(r"\s+", "", source or "").strip()
+
+
+def lexicon_sentence_mark_count(source: str) -> int:
+    return len(re.findall(r"[。！？!?]", source or ""))
+
+
+def is_lexicon_material(source: str) -> bool:
+    text = (source or "").strip()
+    compact = lexicon_compact_source(text)
+    if not compact:
+        return False
+    if "\n" in text or "\r" in text:
+        return False
+    sentence_marks = lexicon_sentence_mark_count(text)
+    if sentence_marks >= 2:
+        return False
+    if len(compact) > LEXICON_MAX_COMPACT_CHARS:
+        return False
+    if sentence_marks == 1 and len(compact) > LEXICON_SENTENCE_MAX_COMPACT_CHARS:
+        return False
+    return True
 
 
 def seed_fixed_phrases(payload: dict) -> dict:
@@ -3175,6 +4019,11 @@ def create_requested_word_entry(payload: WordCreateRequest, requester_id: str, r
     source = payload.source.strip()
     if not source:
         raise HTTPException(status_code=400, detail={"message": "請輸入想新增的詞語。"})
+    if not is_lexicon_material(source):
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "這段內容太長，不適合加入語詞與固定語句資料庫；請選取較短的詞語或固定語句。"},
+        )
     taigi_text = payload.taigi.strip() or translate_chinese_to_taigi(source)
     tailo_text = payload.tailo.strip() or tailo_for(taigi_text)
     word_id = safe_word_id(source, taigi_text)
@@ -3218,7 +4067,7 @@ def create_requested_word_entry(payload: WordCreateRequest, requester_id: str, r
 def upsert_lexicon_entry(db: dict, source: str, taigi_text: str, tailo_text: str, job_id: str = "", category: str = "", source_type: str = "generated", generate_assets_flag: bool = False, payload: Optional[CreateJobRequest] = None, voice_mode: str = "default", voice_control: str = "") -> bool:
     source = source.strip()
     taigi_text = taigi_text.strip()
-    if not source or not taigi_text:
+    if not source or not taigi_text or not is_lexicon_material(source):
         return False
     words = db.setdefault("words", {})
     word_id = safe_word_id(source, taigi_text)
@@ -3367,24 +4216,16 @@ def generate_word_assets(word: dict, voice_mode: str, voice_control: str, device
             "has_video": True,
         }
 
-    reference_audio: Optional[Path] = None
-    if voice_mode == "default":
-        reference_audio = DEFAULT_REFERENCE_AUDIO.expanduser()
-    cmd = [
-        VOXCPM_BIN, "clone" if reference_audio else "design",
-        "--text", word["taigi"],
-        "--control", voice_control,
-        "--output", str(audio_path),
-        "--device", device,
-        "--cache-dir", str(CACHE_DIR),
-        "--no-denoiser",
-        "--local-files-only",
-        "--inference-timesteps", str(max(4, min(timesteps, 10))),
-        "--cfg-value", str(cfg_value),
-    ]
-    if reference_audio and reference_audio.exists():
-        cmd.extend(["--reference-audio", str(reference_audio)])
-    run(cmd)
+    synthesis_text, synthesis_source = word_synthesis_text(word)
+    generated_duration = synthesize_word_audio(
+        audio_path,
+        synthesis_text,
+        voice_mode,
+        voice_control,
+        device,
+        timesteps,
+        cfg_value,
+    )
     generated_video = generate_word_video(word_dir, word["taigi"], audio_path, word.get("tailo", ""))
     if generated_video != video_path:
         shutil.move(generated_video, video_path)
@@ -3395,7 +4236,11 @@ def generate_word_assets(word: dict, voice_mode: str, voice_control: str, device
         "has_audio": audio_path.exists(),
         "has_video": video_path.exists(),
         "problem": False,
+        "problem_type": "",
         "problem_reason": "",
+        "duration": generated_duration,
+        "synthesis_text": synthesis_text,
+        "synthesis_source": synthesis_source,
         "generated_at": time.time(),
     }
 
@@ -3414,6 +4259,10 @@ def word_asset_rating_summary(asset: dict, user_id: str = "") -> dict:
 
 def public_word_assets(word: dict, user_id: str = "") -> list[dict]:
     assets = list(word.get("assets") or [])
+    current_tailo = str(word.get("tailo") or "").strip()
+    current_taigi = str(word.get("taigi") or "").strip()
+    reference = word.get("itaigi_reference") if isinstance(word.get("itaigi_reference"), dict) else {}
+    reference_tailo = str(reference.get("tailo") or "").strip()
     if not assets and word.get("audio_path"):
         assets.append({
             "id": "legacy",
@@ -3421,6 +4270,8 @@ def public_word_assets(word: dict, user_id: str = "") -> list[dict]:
             "video_path": word.get("video_path"),
             "has_audio": bool(word.get("has_audio")),
             "has_video": bool(word.get("has_video")),
+            "synthesis_text": word.get("synthesis_text", ""),
+            "synthesis_source": word.get("synthesis_source", ""),
             "created_at": word.get("generated_at") or word.get("updated_at"),
             "generated_by_id": "system:legacy",
             "generated_by_name": "系統既有素材",
@@ -3432,10 +4283,27 @@ def public_word_assets(word: dict, user_id: str = "") -> list[dict]:
     for asset in assets:
         asset_id = asset.get("id")
         ratings = word_asset_rating_summary(asset, user_id)
+        synthesis_text = str(asset.get("synthesis_text") or "").strip()
+        synthesis_source = str(asset.get("synthesis_source") or "").strip()
+        matches_current_reference = bool(
+            synthesis_text
+            and synthesis_source == "tailo"
+            and synthesis_text in {current_tailo, reference_tailo}
+        )
         public_assets.append({
             "id": asset_id,
             "has_audio": bool(asset.get("has_audio")),
             "has_video": bool(asset.get("has_video")),
+            "synthesis_text": synthesis_text,
+            "synthesis_source": synthesis_source,
+            "matches_current_reference": matches_current_reference,
+            "matches_current_word": bool(
+                synthesis_text
+                and (
+                    synthesis_text == current_tailo
+                    or synthesis_text == current_taigi
+                )
+            ),
             "created_at": asset.get("created_at"),
             "generated_by_name": asset.get("generated_by_name", "匿名使用者"),
             "generated_by_id": asset.get("generated_by_id", ""),
@@ -3446,6 +4314,7 @@ def public_word_assets(word: dict, user_id: str = "") -> list[dict]:
         })
     public_assets.sort(
         key=lambda item: (
+            1 if item.get("matches_current_reference") else 0,
             float(item.get("rating_average") or 0),
             int(item.get("play_count") or 0),
             item.get("created_at") or 0,
@@ -3461,24 +4330,16 @@ def generate_word_asset_variant(word: dict, voice_mode: str, voice_control: str,
     word_dir.mkdir(parents=True, exist_ok=True)
     audio_path = word_dir / "word.wav"
     video_path = word_dir / "word.mp4"
-    reference_audio: Optional[Path] = None
-    if voice_mode == "default":
-        reference_audio = DEFAULT_REFERENCE_AUDIO.expanduser()
-    cmd = [
-        VOXCPM_BIN, "clone" if reference_audio else "design",
-        "--text", word["taigi"],
-        "--control", voice_control,
-        "--output", str(audio_path),
-        "--device", device,
-        "--cache-dir", str(CACHE_DIR),
-        "--no-denoiser",
-        "--local-files-only",
-        "--inference-timesteps", str(max(4, min(timesteps, 10))),
-        "--cfg-value", str(cfg_value),
-    ]
-    if reference_audio and reference_audio.exists():
-        cmd.extend(["--reference-audio", str(reference_audio)])
-    run(cmd)
+    synthesis_text, synthesis_source = word_synthesis_text(word)
+    generated_duration = synthesize_word_audio(
+        audio_path,
+        synthesis_text,
+        voice_mode,
+        voice_control,
+        device,
+        timesteps,
+        cfg_value,
+    )
     generated_video = generate_word_video(word_dir, word["taigi"], audio_path, word.get("tailo", ""))
     if generated_video != video_path:
         shutil.move(generated_video, video_path)
@@ -3488,6 +4349,9 @@ def generate_word_asset_variant(word: dict, voice_mode: str, voice_control: str,
         "video_path": str(video_path),
         "has_audio": audio_path.exists(),
         "has_video": video_path.exists(),
+        "duration": generated_duration,
+        "synthesis_text": synthesis_text,
+        "synthesis_source": synthesis_source,
         "created_at": time.time(),
         "generated_by_id": generated_by_id,
         "generated_by_name": generated_by_name,
@@ -3526,7 +4390,7 @@ def update_word_database_for_job(job_id: str, segment_records: list[dict], paylo
         source_sentence = str(segment.get("source_text") or "").strip()
         taigi_sentence = str(segment.get("taigi_text") or "").strip()
         tailo_sentence = str(segment.get("tailo_text") or "").strip()
-        if len(source_sentence) >= 4:
+        if len(source_sentence) >= 4 and is_lexicon_material(source_sentence):
             changed = upsert_lexicon_entry(
                 db,
                 source_sentence,
@@ -3751,6 +4615,7 @@ def segment_replacement_from_texts(
     segment: dict,
     corrected_taigi: str = "",
     corrected_tailo: str = "",
+    preferred_synthesis_source: str = "taigi",
 ) -> dict[str, str]:
     corrected_taigi = corrected_taigi.strip()
     corrected_tailo = corrected_tailo.strip()
@@ -3766,7 +4631,13 @@ def segment_replacement_from_texts(
         tailo_text = tailo_for(requested_taigi)
     if not tailo_text and taigi_text:
         tailo_text = tailo_for(taigi_text)
-    if taigi_changed:
+    if preferred_synthesis_source == "taigi" and taigi_text:
+        synthesis_text = taigi_text
+        synthesis_source = "taigi"
+    elif preferred_synthesis_source == "tailo" and tailo_text:
+        synthesis_text = tailo_text
+        synthesis_source = "tailo"
+    elif taigi_changed:
         synthesis_text = requested_taigi
         synthesis_source = "corrected_taigi"
     elif tailo_changed:
@@ -4187,7 +5058,13 @@ async def verify_magic_link(payload: VerifyMagicLinkRequest, request: Request):
     if not email:
         raise HTTPException(status_code=401, detail="Invalid or expired login link.")
     session = create_session(email)
-    response = JSONResponse({"authenticated": True, "is_admin": email == ADMIN_EMAIL, "email": email})
+    response = JSONResponse({
+        "authenticated": True,
+        "is_admin": email == ADMIN_EMAIL,
+        "email": email,
+        "session_token": session,
+        "expires_at": time.time() + SESSION_TTL_SECONDS,
+    })
     response.set_cookie(
         ADMIN_SESSION_COOKIE,
         session,
@@ -4202,6 +5079,7 @@ async def verify_magic_link(payload: VerifyMagicLinkRequest, request: Request):
 @app.post("/auth/logout")
 async def logout(request: Request):
     revoke_session(request.cookies.get(ADMIN_SESSION_COOKIE))
+    revoke_session(bearer_token_from_request(request))
     response = JSONResponse({"authenticated": False})
     response.delete_cookie(SESSION_COOKIE)
     response.delete_cookie(ADMIN_SESSION_COOKIE)
@@ -4267,12 +5145,35 @@ async def api_info():
             {"value": nickname, "label": nickname}
             for nickname in ANON_TAIGI_NICKNAMES
         ],
+        "audio_review": {
+            "breeze_asr_model": BREEZE_ASR_MODEL,
+            "breeze_asr_enabled": ENABLE_BREEZE_ASR,
+            "mms_tts_model": MMS_TTS_MODEL,
+            "mms_tts_enabled": ENABLE_MMS_TTS,
+            "mms_tts_license": "CC-BY-NC-4.0 non-commercial comparison only",
+        },
         "pipeline": ["translate", "segment", "tts", "join", "subtitle", "video", "package"],
     }
     if not PUBLIC_ACCESS:
         info["job_dir"] = str(JOB_ROOT)
         info["translation_memory"] = str(TRANSLATION_MEMORY)
     return info
+
+
+@app.get("/external/itaigi/search")
+async def external_itaigi_search(q: str):
+    query = re.sub(r"\s+", " ", q or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Missing query")
+    return {
+        "source": "iTaigi",
+        "query": query,
+        "search_url": f"https://itaigi.tw/k/{quote(query)}",
+        "api_url": f"https://itaigi.tw/平臺項目列表/揣列表?{urlencode({'關鍵字': query})}",
+        "project_url": "https://github.com/i3thuan5/itaigi",
+        "license_note": "iTaigi project references MIT for code and CC0 database contribution terms; keep data as manual reference until import provenance is reviewed.",
+        "import_policy": "manual_reference_before_import",
+    }
 
 
 @app.get("/api/status")
@@ -4288,7 +5189,8 @@ async def api_status(
         "wait_seconds": 0,
         "can_submit": True,
         "next_available_at": time.time(),
-        "sentence_limit": 1,
+        "sentence_limit": None,
+        "max_chars": PUBLIC_ANONYMOUS_MAX_CHARS,
     } if admin_or_token or private_client or is_authenticated(request) else public_rate_limit_state(request)
     return {
         "authenticated": admin_or_token or is_authenticated(request),
@@ -4307,7 +5209,10 @@ async def search_words(
     remember_word_query(q)
     db = load_word_db()
     query = q.strip().lower()
-    items = list(db.get("words", {}).values())
+    items = [
+        item for item in db.get("words", {}).values()
+        if is_lexicon_material(str(item.get("source") or ""))
+    ]
     if query:
         items = [
             item for item in items
@@ -4432,9 +5337,9 @@ async def rate_word(word_id: str, payload: WordRatingRequest, request: Request, 
 
 
 @app.post("/words/{word_id}/generate")
-async def generate_word_asset_endpoint(word_id: str, request: Request, response: Response):
+async def generate_word_asset_endpoint(word_id: str, payload: WordGenerateRequest, request: Request, response: Response):
     user_id = review_user_id(request, response)
-    word, job = enqueue_word_generation_job(word_id, user_id, reviewer_display_name(user_id))
+    word, job = enqueue_word_generation_job(word_id, user_id, reviewer_display_name(user_id), synthesis_source=payload.synthesis_source)
     admin_or_token = is_authorized(request, None, None)
     return {
         "queued": True,
@@ -4459,6 +5364,76 @@ async def generate_word_asset_endpoint(word_id: str, request: Request, response:
     }
 
 
+@app.get("/words/{word_id}/itaigi-reference")
+async def get_word_itaigi_reference(word_id: str):
+    db = load_word_db()
+    word = db.get("words", {}).get(word_id)
+    if not word:
+        raise HTTPException(status_code=404, detail={"message": "找不到這個詞語。"})
+    query = str(word.get("source") or word.get("taigi") or "").strip()
+    result = fetch_itaigi_references(query)
+    word["itaigi_reference_last_lookup"] = {
+        "looked_up_at": time.time(),
+        "query": result["query"],
+        "candidate_count": len(result["candidates"]),
+        "source_url": result["source_url"],
+    }
+    db["words"][word_id] = word
+    save_word_db(db)
+    record_stat_action("lookup_itaigi_reference", "word", word_id, metadata={"candidate_count": len(result["candidates"])})
+    return result
+
+
+@app.post("/words/{word_id}/itaigi-reference/apply")
+async def apply_word_itaigi_reference(
+    word_id: str,
+    payload: WordItaigiReferenceApplyRequest,
+    request: Request,
+    response: Response,
+):
+    db = load_word_db()
+    word = db.get("words", {}).get(word_id)
+    if not word:
+        raise HTTPException(status_code=404, detail={"message": "找不到這個詞語。"})
+    taigi_text = payload.taigi.strip()
+    tailo_text = payload.tailo.strip()
+    if not taigi_text or not tailo_text:
+        raise HTTPException(status_code=400, detail={"message": "iTaigi 參考資料缺少台語文字或台羅，無法套用。"})
+    user_id = review_user_id(request, response)
+    now = time.time()
+    word.update({
+        "taigi": taigi_text,
+        "tailo": tailo_text,
+        "problem": False,
+        "problem_type": "",
+        "problem_reason": "",
+        "itaigi_reference": {
+            "source": "iTaigi",
+            "source_url": payload.source_url.strip() or f"https://itaigi.tw/k/{quote(str(word.get('source') or taigi_text))}",
+            "taigi": taigi_text,
+            "tailo": tailo_text,
+            "audio_url": payload.audio_url.strip() or itaigi_hapsing_audio_url(tailo_text),
+            "good": payload.good,
+            "bad": payload.bad,
+            "applied_by_id": user_id,
+            "applied_by_name": reviewer_display_name(user_id),
+            "applied_at": now,
+        },
+        "updated_at": now,
+    })
+    db["words"][word_id] = word
+    save_word_db(db)
+    word, job = enqueue_word_generation_job(word_id, user_id, reviewer_display_name(user_id))
+    admin_or_token = is_authorized(request, None, None)
+    record_stat_action("apply_itaigi_reference", "word", word_id, metadata={"job_id": job.id if job else "", "tailo": tailo_text})
+    return {
+        "saved": True,
+        "queued": bool(job),
+        "word": public_word_entry(word, load_stats().get("words", {}), user_id),
+        "job": present_job(job, admin_or_token, user_id) if job else None,
+    }
+
+
 @app.post("/words/{word_id}/issue")
 async def report_word_issue(word_id: str, payload: WordIssueRequest):
     db = load_word_db()
@@ -4466,11 +5441,12 @@ async def report_word_issue(word_id: str, payload: WordIssueRequest):
     if not word:
         raise HTTPException(status_code=404, detail={"message": "找不到這個詞語。"})
     word["problem"] = True
+    word["problem_type"] = payload.issue_type.strip()
     word["problem_reason"] = payload.reason.strip() or "使用者回報詞語素材有問題"
     word["problem_reported_at"] = time.time()
     db["words"][word_id] = word
     save_word_db(db)
-    return {"saved": True, "word": {k: word.get(k) for k in ("id", "source", "taigi", "tailo", "problem", "problem_reason")}}
+    return {"saved": True, "word": {k: word.get(k) for k in ("id", "source", "taigi", "tailo", "problem", "problem_type", "problem_reason")}}
 
 
 @app.post("/words/{word_id}/token-reviews")
@@ -4591,7 +5567,21 @@ async def download_word_asset(word_id: str, kind: Literal["audio", "video"]):
         raise HTTPException(status_code=404, detail={"message": "這個詞語還沒有可下載的素材。"})
     media_type = "audio/wav" if kind == "audio" else "video/mp4"
     increment_play(kind, "word", word_id)
-    return FileResponse(path, media_type=media_type, headers={"Content-Disposition": content_disposition(path.name)})
+    return FileResponse(path, media_type=media_type, headers={"Content-Disposition": content_disposition(word_download_filename(word, kind, path))})
+
+
+@app.get("/words/{word_id}/media/{kind}")
+async def media_word_asset(word_id: str, kind: Literal["audio", "video"]):
+    db = load_word_db()
+    word = db.get("words", {}).get(word_id)
+    if not word:
+        raise HTTPException(status_code=404, detail={"message": "找不到這個詞語。"})
+    path = Path(word.get("audio_path" if kind == "audio" else "video_path") or "")
+    if not path.exists() or WORD_ASSET_DIR not in path.parents:
+        raise HTTPException(status_code=404, detail={"message": "這個詞語還沒有可播放的素材。"})
+    media_type = "audio/wav" if kind == "audio" else "video/mp4"
+    increment_play(kind, "word", word_id)
+    return FileResponse(path, media_type=media_type)
 
 
 @app.get("/words/{word_id}/assets/{asset_id}/download/{kind}")
@@ -4614,7 +5604,30 @@ async def download_word_asset_variant(word_id: str, asset_id: str, kind: Literal
         raise HTTPException(status_code=404, detail={"message": "這筆詞語語音還沒有可下載的素材。"})
     media_type = "audio/wav" if kind == "audio" else "video/mp4"
     increment_play(kind, "word", word_id, job_id=asset_id)
-    return FileResponse(path, media_type=media_type, headers={"Content-Disposition": content_disposition(path.name)})
+    return FileResponse(path, media_type=media_type, headers={"Content-Disposition": content_disposition(word_download_filename(word, kind, path))})
+
+
+@app.get("/words/{word_id}/assets/{asset_id}/media/{kind}")
+async def media_word_asset_variant(word_id: str, asset_id: str, kind: Literal["audio", "video"]):
+    db = load_word_db()
+    word = db.get("words", {}).get(word_id)
+    if not word:
+        raise HTTPException(status_code=404, detail={"message": "找不到這個詞語。"})
+    if asset_id == "legacy":
+        asset = {
+            "audio_path": word.get("audio_path"),
+            "video_path": word.get("video_path"),
+        }
+    else:
+        asset = next((item for item in word.get("assets", []) if item.get("id") == asset_id), None)
+    if not asset:
+        raise HTTPException(status_code=404, detail={"message": "找不到這筆詞語語音。"})
+    path = Path(asset.get("audio_path" if kind == "audio" else "video_path") or "")
+    if not path.exists() or WORD_ASSET_DIR not in path.parents:
+        raise HTTPException(status_code=404, detail={"message": "這筆詞語語音還沒有可播放的素材。"})
+    media_type = "audio/wav" if kind == "audio" else "video/mp4"
+    increment_play(kind, "word", word_id, job_id=asset_id)
+    return FileResponse(path, media_type=media_type)
 
 
 @app.get("/admin/settings")
@@ -4679,6 +5692,86 @@ async def sync_static_storage(
 ):
     require_auth(request, taigi_web_token_cookie, authorization)
     return sync_public_static_to_object_storage(load_settings())
+
+
+@app.post("/admin/tools/term-regenerate")
+async def batch_regenerate_segments_by_term(
+    payload: TermBatchRegenerateRequest,
+    request: Request,
+    response: Response,
+    taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
+):
+    require_auth(request, taigi_web_token_cookie, authorization)
+    search_term = payload.search_term.strip()
+    taigi_replacement = payload.taigi_replacement.strip()
+    if not search_term or not taigi_replacement:
+        raise HTTPException(status_code=400, detail={"message": "請提供搜尋詞與台語替換詞。"})
+    memory_entry = upsert_translation_memory_term(
+        search_term,
+        taigi_replacement,
+        note="Admin 批次詞語修正工具建立。",
+        actor=authenticated_email(request) or "admin",
+    )
+    owner_id = review_user_id(request, response)
+    max_jobs = max(1, min(int(payload.max_jobs or 50), 200))
+    matches = []
+    queued_jobs = []
+    for job in sorted(app_data["jobs"].list(), key=lambda item: item.updated_at or item.created_at, reverse=True):
+        if len(matches) >= max_jobs:
+            break
+        if job.kind != "script" or job.status != "complete":
+            continue
+        segments_payload = ensure_job_segments_payload(job)
+        if not segments_payload:
+            continue
+        replacements: dict[int, dict[str, str]] = {}
+        segment_matches = []
+        for segment in segments_payload.get("segments", []):
+            if not segment_matches_term(segment, search_term):
+                continue
+            idx = int(segment.get("index") or 0)
+            replacement = replacement_for_term_segment(segment, search_term, taigi_replacement)
+            segment_matches.append({
+                "index": idx,
+                "source_text": str(segment.get("source_text") or ""),
+                "taigi_text": str(segment.get("taigi_text") or ""),
+                "replacement_taigi_text": replacement.get("taigi_text") if replacement else "",
+                "will_regenerate": bool(replacement),
+            })
+            if replacement:
+                replacements[idx] = replacement
+        if not segment_matches:
+            continue
+        match_item = {
+            "job_id": job.id,
+            "title": job.title,
+            "segment_count": len(segment_matches),
+            "regeneratable_count": len(replacements),
+            "segments": segment_matches,
+        }
+        matches.append(match_item)
+        if payload.dry_run or not replacements:
+            continue
+        regeneration_job = enqueue_segment_regeneration_job(job, owner_id, replacements, 0)
+        queued_jobs.append(present_job(regeneration_job, True, owner_id))
+    if not payload.dry_run:
+        record_stat_action(
+            "batch_regenerate_term_segments",
+            "term",
+            search_term,
+            metadata={"replacement": taigi_replacement, "match_jobs": len(matches), "queued_jobs": len(queued_jobs)},
+        )
+    return {
+        "dry_run": payload.dry_run,
+        "search_term": search_term,
+        "taigi_replacement": taigi_replacement,
+        "memory": memory_entry,
+        "match_count": sum(int(item.get("segment_count") or 0) for item in matches),
+        "regeneratable_count": sum(int(item.get("regeneratable_count") or 0) for item in matches),
+        "matched_jobs": matches,
+        "queued_jobs": queued_jobs,
+    }
 
 
 @app.post("/jobs")
@@ -4762,13 +5855,12 @@ async def get_job_segments(
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
     authorization: Annotated[Optional[str], Header()] = None,
 ):
-    job = app_data["jobs"].get(job_id)
-    require_job_access(job, request, taigi_web_token_cookie, authorization)
-    output_dir = Path(job.output_dir or JOB_ROOT / job_id / "output")
-    segments_path = output_dir / "segments.json"
-    if not state_json_exists(segments_path):
+    requested_job = app_data["jobs"].get(job_id)
+    require_job_access(requested_job, request, taigi_web_token_cookie, authorization)
+    job = source_job_for_segment_regeneration(requested_job)
+    payload = ensure_job_segments_payload(job)
+    if not payload:
         return {"segments": [], "reviews": []}
-    payload = load_state_json_file(segments_path, {"segments": []})
     reviews = load_reviews(job)
     user_id = review_user_id(request, response)
     word_db = load_word_db()
@@ -4784,14 +5876,17 @@ async def get_job_segments(
         for token in tokens:
             token["review_status"] = review_statuses.get(str(token.get("source") or ""), "")
         segment["source_tokens"] = tokens
+        analysis = latest_audio_review_for_segment(job, segment_index)
+        if analysis:
+            segment["audio_review"] = analysis
     return {"segments": segments, "reviews": reviews}
 
 
 def persist_segment_feedback(job: Job, segment_index: int, feedback: SegmentFeedback, user_id: str) -> tuple[dict, dict]:
-    output_dir = Path(job.output_dir or JOB_ROOT / job.id / "output")
-    segments_path = output_dir / "segments.json"
-    if not state_json_exists(segments_path):
+    payload = ensure_job_segments_payload(job)
+    if not payload:
         raise HTTPException(status_code=404, detail="Segments not found")
+    segments_path = output_dir_for_job(job) / "segments.json"
 
     reviews = load_reviews(job)
     now = time.time()
@@ -4818,7 +5913,7 @@ def persist_segment_feedback(job: Job, segment_index: int, feedback: SegmentFeed
     save_reviews(job, reviews)
     stats = segment_review_stats(reviews, segment_index, user_id)
 
-    segments_payload = load_state_json_file(segments_path, {"segments": []})
+    segments_payload = load_state_json_file(segments_path, payload)
     matched = False
     for segment in segments_payload.get("segments", []):
         if int(segment.get("index") or 0) == segment_index:
@@ -4884,6 +5979,69 @@ async def save_job_rating(
     return {"saved": True, "review": review, "stats": job_rating_summary(job, user_id)}
 
 
+@app.post("/jobs/{job_id}/issue")
+async def save_job_issue(
+    job_id: str,
+    payload: JobIssueRequest,
+    request: Request,
+    response: Response,
+    taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
+):
+    job = app_data["jobs"].get(job_id)
+    require_job_access(job, request, taigi_web_token_cookie, authorization)
+    if job.status != "complete":
+        raise HTTPException(status_code=409, detail={"message": "只有完成的工作可以標示成果狀態。"})
+    user_id = review_user_id(request, response)
+    reason = payload.reason.strip()
+    if payload.status == "problem":
+        issue_type = payload.issue_type.strip()
+        updated = app_data["jobs"].update(
+            job_id,
+            problem=True,
+            problem_type=issue_type,
+            problem_reason=reason or "使用者標示這個工作成果有問題。",
+            problem_reported_at=time.time(),
+            problem_reported_by=user_id,
+        )
+        record_stat_action("report_job_issue", "job", job_id, metadata={"issue_type": issue_type})
+    else:
+        updated = app_data["jobs"].update(
+            job_id,
+            problem=False,
+            problem_type="",
+            problem_reason=reason,
+            problem_reported_at=time.time(),
+            problem_reported_by=user_id,
+        )
+        record_stat_action("mark_job_ok", "job", job_id)
+    return {"saved": True, "job": present_job(updated, is_authorized(request, taigi_web_token_cookie, authorization), user_id)}
+
+
+@app.post("/jobs/{job_id}/featured")
+async def set_job_featured(
+    job_id: str,
+    payload: JobFeaturedRequest,
+    request: Request,
+    response: Response,
+    taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
+):
+    require_auth(request, taigi_web_token_cookie, authorization)
+    job = app_data["jobs"].get(job_id)
+    if job.status != "complete":
+        raise HTTPException(status_code=409, detail={"message": "只有完成的工作可以設為首頁精選。"})
+    user_id = review_user_id(request, response)
+    updated = app_data["jobs"].update(
+        job_id,
+        featured_at=time.time() if payload.featured else None,
+        featured_by=user_id if payload.featured else "",
+        featured_note=payload.note.strip() if payload.featured else "",
+    )
+    record_stat_action("feature_job" if payload.featured else "unfeature_job", "job", job_id)
+    return {"saved": True, "job": present_job(updated, is_authorized(request, taigi_web_token_cookie, authorization), user_id)}
+
+
 @app.post("/jobs/{job_id}/segments/{segment_index}/feedback")
 async def save_segment_feedback(
     job_id: str,
@@ -4937,11 +6095,9 @@ async def regenerate_segment_audio(
     if job.status != "complete":
         raise HTTPException(status_code=409, detail={"message": "只有完成的工作可以重生指定分段。"})
 
-    output_dir = Path(job.output_dir or JOB_ROOT / job.id / "output")
-    segments_path = output_dir / "segments.json"
-    if not state_json_exists(segments_path):
-        raise HTTPException(status_code=404, detail={"message": "找不到分段資料。"})
-    segments_payload = load_state_json_file(segments_path, {"segments": []})
+    segments_payload = ensure_job_segments_payload(job)
+    if not segments_payload:
+        raise HTTPException(status_code=404, detail={"message": "找不到分段資料，而且自動修復失敗。"})
     target = next((segment for segment in segments_payload.get("segments", []) if int(segment.get("index") or 0) == segment_index), None)
     if not target:
         raise HTTPException(status_code=404, detail={"message": "找不到這個分段。"})
@@ -4956,13 +6112,14 @@ async def regenerate_segment_audio(
             corrections=payload.corrections,
         )
         persist_segment_feedback(job, segment_index, feedback, user_id)
-        segments_payload = load_state_json_file(segments_path, {"segments": []})
+        segments_payload = ensure_job_segments_payload(job)
         target = next(segment for segment in segments_payload.get("segments", []) if int(segment.get("index") or 0) == segment_index)
 
     replacement = segment_replacement_from_texts(
         target,
         payload.corrected_taigi_text,
         payload.corrected_tailo_text,
+        payload.synthesis_source,
     )
     if not replacement["synthesis_text"]:
         raise HTTPException(status_code=400, detail={"message": "請先提供修正後台語文字或修正後台羅，才能重新產生這段語音。"})
@@ -4997,11 +6154,9 @@ async def regenerate_reviewed_segments(
     if job.status != "complete":
         raise HTTPException(status_code=409, detail={"message": "只有完成的工作可以批次重生分段。"})
 
-    output_dir = Path(job.output_dir or JOB_ROOT / job.id / "output")
-    segments_path = output_dir / "segments.json"
-    if not state_json_exists(segments_path):
-        raise HTTPException(status_code=404, detail={"message": "找不到分段資料。"})
-    segments_payload = load_state_json_file(segments_path, {"segments": []})
+    segments_payload = ensure_job_segments_payload(job)
+    if not segments_payload:
+        raise HTTPException(status_code=404, detail={"message": "找不到分段資料，而且自動修復失敗。"})
     segment_by_index = {
         int(segment.get("index") or 0): segment
         for segment in segments_payload.get("segments", [])
@@ -5054,13 +6209,34 @@ async def regenerate_job_from_corrections(
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
     authorization: Annotated[Optional[str], Header()] = None,
 ):
-    source_job = app_data["jobs"].get(job_id)
-    require_job_access(source_job, request, taigi_web_token_cookie, authorization)
-    output_dir = Path(source_job.output_dir or JOB_ROOT / job_id / "output")
-    segments_path = output_dir / "segments.json"
-    if not state_json_exists(segments_path):
-        raise HTTPException(status_code=404, detail={"message": "找不到分段資料，無法用修正稿重新生成。"})
-    segments = load_state_json_file(segments_path, {"segments": []}).get("segments", [])
+    requested_job = app_data["jobs"].get(job_id)
+    require_job_access(requested_job, request, taigi_web_token_cookie, authorization)
+    source_job = source_job_for_segment_regeneration(requested_job)
+    admin_or_token = is_authorized(request, taigi_web_token_cookie, authorization)
+    owner_id = review_user_id(request, response)
+    if source_job.kind == "word_asset":
+        word_id = str(source_job.metadata.get("word_id") or "")
+        if not word_id:
+            raise HTTPException(status_code=400, detail={"message": "這筆詞語語音工作缺少詞語資訊，無法重新產生。"})
+        word, word_job = enqueue_word_generation_job(
+            word_id,
+            owner_id,
+            reviewer_display_name(owner_id),
+            priority=0 if is_private_client(request) or admin_or_token else 10,
+        )
+        record_stat_action(
+            "regenerate_word_asset_from_job",
+            "word",
+            word_id,
+            metadata={"source_job_id": source_job.id, "job_id": word_job.id if word_job else ""},
+        )
+        if word_job:
+            return present_job(word_job, admin_or_token, owner_id)
+        raise HTTPException(status_code=409, detail={"message": word.get("generation_stage") or "這個詞語語音已在佇列中。"})
+    segments_payload = ensure_job_segments_payload(source_job)
+    if not segments_payload:
+        raise HTTPException(status_code=404, detail={"message": "找不到分段資料，而且自動修復失敗，無法用修正稿重新生成。"})
+    segments = segments_payload.get("segments", [])
     if not segments:
         raise HTTPException(status_code=400, detail={"message": "這個工作沒有可重新生成的分段。"})
 
@@ -5072,8 +6248,6 @@ async def regenerate_job_from_corrections(
     if not taigi_override:
         raise HTTPException(status_code=400, detail={"message": "沒有台語文字或修正後台語文字可用來重新生成。"})
 
-    admin_or_token = is_authorized(request, taigi_web_token_cookie, authorization)
-    owner_id = review_user_id(request, response)
     if not admin_or_token and not is_private_client(request):
         enforce_public_rate_limit(request, chinese_text)
     settings = load_settings()
@@ -5107,6 +6281,89 @@ async def regenerate_job_from_corrections(
     record_stat_action("regenerate_job", "job", new_job_id)
     enqueue_job(0 if is_private_client(request) or admin_or_token else 10, new_job_id, payload)
     return present_job(new_job, admin_or_token, owner_id)
+
+
+@app.post("/jobs/{job_id}/regenerate-full")
+async def regenerate_full_job(
+    job_id: str,
+    request: Request,
+    response: Response,
+    taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
+):
+    require_auth(request, taigi_web_token_cookie, authorization)
+    requested_job = app_data["jobs"].get(job_id)
+    if not requested_job:
+        raise HTTPException(status_code=404, detail={"message": "找不到這個工作。"})
+    source_job = source_job_for_segment_regeneration(requested_job)
+    owner_id = review_user_id(request, response)
+    admin_or_token = is_authorized(request, taigi_web_token_cookie, authorization)
+    new_job = queue_full_script_regeneration(source_job, owner_id, admin_or_token)
+    return present_job(new_job, admin_or_token, owner_id)
+
+
+@app.post("/jobs/{job_id}/audio-review")
+async def queue_audio_review(
+    job_id: str,
+    payload: AudioReviewRequest,
+    request: Request,
+    taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
+):
+    requested_job = app_data["jobs"].get(job_id)
+    require_job_access(requested_job, request, taigi_web_token_cookie, authorization)
+    source_job = source_job_for_segment_regeneration(requested_job)
+    if source_job.status != "complete":
+        raise HTTPException(status_code=409, detail={"message": "只有完成的工作可以做音訊校對。"})
+    if source_job.kind not in {"script", "segment_regeneration"}:
+        raise HTTPException(status_code=400, detail={"message": "目前只支援整段稿件與重生分段的音訊校對。"})
+    if not ensure_job_segments_payload(source_job):
+        raise HTTPException(status_code=404, detail={"message": "找不到可校對的分段資料。"})
+    owner_id = review_user_id(request)
+    now = time.time()
+    review_job = Job(
+        id=uuid.uuid4().hex,
+        kind="audio_review",
+        owner_id=owner_id,
+        title=f"音訊校對：{source_job.title}",
+        status="queued",
+        stage="Queued",
+        progress=0,
+        created_at=now,
+        updated_at=now,
+        chinese_text=source_job.chinese_text,
+        taigi_text=source_job.taigi_text,
+        tailo_text=source_job.tailo_text,
+        segment_count=source_job.segment_count,
+        metadata={
+            "source_job_id": source_job.id,
+            "run_asr": payload.run_asr,
+            "generate_mms": payload.generate_mms,
+            "breeze_asr_model": BREEZE_ASR_MODEL,
+            "mms_tts_model": MMS_TTS_MODEL,
+        },
+    )
+    app_data["jobs"].add(review_job)
+    enqueue_job(20 if is_private_client(request) or is_authorized(request, taigi_web_token_cookie, authorization) else 40, review_job.id, None)
+    record_stat_action("queue_audio_review", "job", source_job.id, metadata={"job_id": review_job.id, "generate_mms": payload.generate_mms})
+    return {
+        "queued": True,
+        "job": present_job(review_job, is_authorized(request, taigi_web_token_cookie, authorization), owner_id),
+        "source_job": present_job(source_job, is_authorized(request, taigi_web_token_cookie, authorization), owner_id),
+    }
+
+
+@app.get("/jobs/{job_id}/audio-review")
+async def get_audio_review(
+    job_id: str,
+    request: Request,
+    taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
+):
+    requested_job = app_data["jobs"].get(job_id)
+    require_job_access(requested_job, request, taigi_web_token_cookie, authorization)
+    job = source_job_for_segment_regeneration(requested_job)
+    return latest_audio_review_payload(job) or {"segments": [], "summary": {}, "providers": {}}
 
 
 @app.post("/jobs/{job_id}/retry")
@@ -5173,7 +6430,7 @@ async def download_job_file(
         increment_play("audio", "job", job_id)
     elif kind == "video":
         increment_play("video", "job", job_id)
-    return FileResponse(path, headers={"Content-Disposition": content_disposition(path.name)})
+    return FileResponse(path, headers={"Content-Disposition": content_disposition(job_download_filename(job, kind, path))})
 
 
 @app.get("/jobs/{job_id}/segments/{segment_index}/audio")
@@ -5191,4 +6448,5 @@ async def download_segment_audio(
     if not path.exists():
         raise HTTPException(status_code=404, detail="Segment audio not found")
     increment_play("audio", "segment", f"{segment_index}", job_id=job_id)
-    return FileResponse(path, media_type="audio/wav", headers={"Content-Disposition": content_disposition(path.name)})
+    filename = segment_download_filename(job, segment_index, output_dir, path)
+    return FileResponse(path, media_type="audio/wav", headers={"Content-Disposition": content_disposition(filename)})
