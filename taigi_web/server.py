@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import random
@@ -231,6 +232,18 @@ class SegmentFeedback(BaseModel):
     corrected_taigi_text: str = ""
     corrected_tailo_text: str = ""
     corrections: list[SegmentCorrection] = []
+
+
+class SegmentRegenerateRequest(BaseModel):
+    rating: int = 0
+    note: str = ""
+    corrected_taigi_text: str = ""
+    corrected_tailo_text: str = ""
+    corrections: list[SegmentCorrection] = []
+
+
+class SegmentBatchRegenerateRequest(BaseModel):
+    only_with_corrections: bool = False
 
 
 class WordIssueRequest(BaseModel):
@@ -2915,6 +2928,127 @@ def copy_to_onedrive(paths: list[Path]) -> Optional[Path]:
     return dest
 
 
+def write_segment_text_files(segments_dir: Path, segment: dict):
+    idx = int(segment["index"])
+    (segments_dir / f"seg_{idx:02d}.source.txt").write_text(str(segment.get("source_text") or ""), encoding="utf-8")
+    (segments_dir / f"seg_{idx:02d}.txt").write_text(str(segment.get("taigi_text") or ""), encoding="utf-8")
+    (segments_dir / f"seg_{idx:02d}.tailo.txt").write_text(str(segment.get("tailo_text") or ""), encoding="utf-8")
+
+
+def synthesize_segment_audio(
+    wav_path: Path,
+    text: str,
+    voice_mode: str,
+    voice_control: str,
+    device: str,
+    timesteps: int,
+    cfg_value: float,
+):
+    reference_audio: Optional[Path] = None
+    if voice_mode == "default":
+        reference_audio = DEFAULT_REFERENCE_AUDIO.expanduser()
+        if not reference_audio.exists():
+            raise FileNotFoundError(f"Reference audio not found: {reference_audio}")
+    tmp_path = wav_path.with_name(f"{wav_path.stem}.regenerating{wav_path.suffix}")
+    cmd = [
+        VOXCPM_BIN, "clone" if voice_mode == "default" else "design",
+        "--text", text,
+        "--control", voice_control,
+        "--output", str(tmp_path),
+        "--device", device,
+        "--cache-dir", str(CACHE_DIR),
+        "--no-denoiser",
+        "--local-files-only",
+        "--inference-timesteps", str(timesteps),
+        "--cfg-value", str(cfg_value),
+    ]
+    if reference_audio:
+        cmd.extend(["--reference-audio", str(reference_audio)])
+    run(cmd)
+    tmp_path.replace(wav_path)
+
+
+def rebuild_job_outputs(job: Job, segments_payload: dict, *, render_video: bool = True) -> tuple[Path, Optional[Path], Path]:
+    output_dir = Path(job.output_dir or JOB_ROOT / job.id / "output")
+    segments_dir = output_dir / "segments"
+    segments = sorted(segments_payload.get("segments", []), key=lambda item: int(item.get("index") or 0))
+    if not segments:
+        raise ValueError("No segments to rebuild.")
+
+    wav_paths: list[Path] = []
+    for segment in segments:
+        idx = int(segment.get("index") or 0)
+        wav_path = segments_dir / f"seg_{idx:02d}.wav"
+        if not wav_path.exists():
+            raise FileNotFoundError(f"Segment audio not found: {wav_path}")
+        segment["audio_file"] = f"segments/{wav_path.name}"
+        wav_paths.append(wav_path)
+
+    concat_path = segments_dir / "concat.txt"
+    concat_path.write_text("".join(f"file '{path.name}'\n" for path in wav_paths), encoding="utf-8")
+    audio_path = output_dir / "taigi_voice.wav"
+    run([FFMPEG, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_path.name), "-c", "copy", str(audio_path)], cwd=segments_dir)
+
+    timeline = []
+    cursor = 0.0
+    for segment, wav_path in zip(segments, wav_paths):
+        dur = duration(wav_path)
+        segment["duration"] = dur
+        segment["start"] = cursor
+        segment["end"] = cursor + dur
+        timeline.append({
+            "index": segment["index"],
+            "start": cursor,
+            "end": cursor + dur,
+            "duration": dur,
+            "text": segment.get("taigi_text", ""),
+            "source_text": segment.get("source_text", ""),
+            "tailo_text": segment.get("tailo_text", ""),
+            "audio_file": segment["audio_file"],
+        })
+        cursor += dur
+
+    (output_dir / "taigi_draft.txt").write_text("\n".join(str(segment.get("taigi_text") or "") for segment in segments), encoding="utf-8")
+    (output_dir / "tailo.txt").write_text("\n".join(str(segment.get("tailo_text") or "") for segment in segments), encoding="utf-8")
+    (output_dir / "subtitles.json").write_text(json.dumps({"duration": cursor, "segments": timeline}, ensure_ascii=False, indent=2), encoding="utf-8")
+    (output_dir / "segments.json").write_text(json.dumps({"segments": segments}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    video_path = make_video(output_dir, job.title, audio_path, timeline) if render_video and job.video_path else None
+    zip_path = make_archive(output_dir)
+    return audio_path, video_path, zip_path
+
+
+def regenerate_job_segments_from_texts(job: Job, segments_payload: dict, replacements: dict[int, tuple[str, str]]) -> tuple[list[dict], Path, Optional[Path], Path]:
+    output_dir = Path(job.output_dir or JOB_ROOT / job.id / "output")
+    segments_dir = output_dir / "segments"
+    voice_mode = (output_dir / "voice_mode.txt").read_text(encoding="utf-8").strip() if (output_dir / "voice_mode.txt").exists() else load_settings().default_reference_voice_mode
+    voice_control = (output_dir / "voice_control.txt").read_text(encoding="utf-8").strip() if (output_dir / "voice_control.txt").exists() else resolve_voice_control("default_male")
+    regenerated = []
+    for segment in segments_payload.get("segments", []):
+        idx = int(segment.get("index") or 0)
+        if idx not in replacements:
+            continue
+        new_taigi, new_tailo = replacements[idx]
+        new_taigi = new_taigi.strip()
+        if not new_taigi:
+            continue
+        new_tailo = new_tailo.strip() or tailo_for(new_taigi)
+        wav_path = segments_dir / f"seg_{idx:02d}.wav"
+        synthesize_segment_audio(wav_path, new_taigi, voice_mode, voice_control, DEFAULT_DEVICE, 10, 2.5)
+        segment["taigi_text"] = new_taigi
+        segment["tailo_text"] = new_tailo
+        segment["corrected_taigi_text"] = new_taigi
+        segment["corrected_tailo_text"] = new_tailo
+        segment["regenerated_at"] = time.time()
+        segment["audio_file"] = f"segments/{wav_path.name}"
+        write_segment_text_files(segments_dir, segment)
+        regenerated.append(segment)
+    if not regenerated:
+        raise ValueError("No segment text available for regeneration.")
+    audio_path, video_path, zip_path = rebuild_job_outputs(job, segments_payload, render_video=True)
+    return regenerated, audio_path, video_path, zip_path
+
+
 def run_job(job_id: str, payload: CreateJobRequest):
     jobs: JobStore = app_data["jobs"]
     started_at = time.time()
@@ -2937,10 +3071,7 @@ def run_job(job_id: str, payload: CreateJobRequest):
         if not segment_records:
             raise ValueError("No text to synthesize.")
         for record in segment_records:
-            idx = record["index"]
-            (segments_dir / f"seg_{idx:02d}.source.txt").write_text(record["source_text"], encoding="utf-8")
-            (segments_dir / f"seg_{idx:02d}.txt").write_text(record["taigi_text"], encoding="utf-8")
-            (segments_dir / f"seg_{idx:02d}.tailo.txt").write_text(record["tailo_text"], encoding="utf-8")
+            write_segment_text_files(segments_dir, record)
         jobs.update(job_id, segment_count=len(segment_records), stage=f"Generating {len(segment_records)} audio segments", progress=20)
 
         voice_mode = payload.reference_voice_mode or load_settings().default_reference_voice_mode
@@ -2961,21 +3092,15 @@ def run_job(job_id: str, payload: CreateJobRequest):
             progress = 20 + int((idx - 1) / len(segment_records) * 50)
             jobs.update(job_id, stage=f"Generating audio segment {idx}/{len(segment_records)}", progress=progress)
             wav_path = segments_dir / f"seg_{idx:02d}.wav"
-            cmd = [
-                VOXCPM_BIN, "clone" if voice_mode == "default" else "design",
-                "--text", record["taigi_text"],
-                "--control", voice_control,
-                "--output", str(wav_path),
-                "--device", payload.device,
-                "--cache-dir", str(CACHE_DIR),
-                "--no-denoiser",
-                "--local-files-only",
-                "--inference-timesteps", str(payload.inference_timesteps),
-                "--cfg-value", str(payload.cfg_value),
-            ]
-            if reference_audio:
-                cmd.extend(["--reference-audio", str(reference_audio)])
-            run(cmd)
+            synthesize_segment_audio(
+                wav_path,
+                record["taigi_text"],
+                voice_mode,
+                voice_control,
+                payload.device,
+                payload.inference_timesteps,
+                payload.cfg_value,
+            )
             record["audio_file"] = f"segments/{wav_path.name}"
             wav_paths.append(wav_path)
 
@@ -3628,6 +3753,59 @@ async def get_job_segments(
     return {"segments": segments, "reviews": reviews}
 
 
+def persist_segment_feedback(job: Job, segment_index: int, feedback: SegmentFeedback, user_id: str) -> tuple[dict, dict]:
+    output_dir = Path(job.output_dir or JOB_ROOT / job.id / "output")
+    segments_path = output_dir / "segments.json"
+    if not segments_path.exists():
+        raise HTTPException(status_code=404, detail="Segments not found")
+
+    reviews = load_reviews(job)
+    now = time.time()
+    review = {
+        "segment_index": segment_index,
+        "user_id": user_id,
+        "rating": feedback.rating,
+        "note": feedback.note,
+        "corrected_taigi_text": feedback.corrected_taigi_text,
+        "corrected_tailo_text": feedback.corrected_tailo_text,
+        "corrections": [item.model_dump() for item in feedback.corrections],
+        "updated_at": now,
+    }
+    replaced = False
+    for index, existing in enumerate(reviews):
+        if existing.get("segment_index") == segment_index and existing.get("user_id") == user_id:
+            review["created_at"] = existing.get("created_at", now)
+            reviews[index] = review
+            replaced = True
+            break
+    if not replaced:
+        review["created_at"] = now
+        reviews.append(review)
+    save_reviews(job, reviews)
+    stats = segment_review_stats(reviews, segment_index, user_id)
+
+    segments_payload = json.loads(segments_path.read_text(encoding="utf-8"))
+    matched = False
+    for segment in segments_payload.get("segments", []):
+        if int(segment.get("index") or 0) == segment_index:
+            matched = True
+            segment["rating"] = stats["my_rating"]
+            segment["my_rating"] = stats["my_rating"]
+            segment["average_rating"] = stats["average_rating"]
+            segment["rating_count"] = stats["rating_count"]
+            segment["feedback_count"] = stats["rating_count"]
+            if feedback.corrected_taigi_text.strip():
+                segment["corrected_taigi_text"] = feedback.corrected_taigi_text.strip()
+            if feedback.corrected_tailo_text.strip():
+                segment["corrected_tailo_text"] = feedback.corrected_tailo_text.strip()
+            break
+    if not matched:
+        raise HTTPException(status_code=404, detail={"message": "找不到這個分段。"})
+    segments_path.write_text(json.dumps(segments_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    remember_feedback(job.id, segment_index, feedback)
+    return review, stats
+
+
 @app.post("/jobs/{job_id}/rating")
 async def save_job_rating(
     job_id: str,
@@ -3686,54 +3864,170 @@ async def save_segment_feedback(
         raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
     job = app_data["jobs"].get(job_id)
     require_job_access(job, request, taigi_web_token_cookie, authorization)
+    user_id = review_user_id(request, response)
+    review, stats = persist_segment_feedback(job, segment_index, feedback, user_id)
+    record_stat_action("rate_segment", "segment", f"{job_id}:{segment_index}")
+    return {"saved": True, "review": review, "stats": stats}
+
+
+@app.post("/jobs/{job_id}/segments/{segment_index}/regenerate")
+async def regenerate_segment_audio(
+    job_id: str,
+    segment_index: int,
+    payload: SegmentRegenerateRequest,
+    request: Request,
+    response: Response,
+    taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
+):
+    if payload.rating and (payload.rating < 1 or payload.rating > 5):
+        raise HTTPException(status_code=400, detail={"message": "評分必須介於 1 到 5。"})
+    job = app_data["jobs"].get(job_id)
+    require_job_access(job, request, taigi_web_token_cookie, authorization)
+    if job.status != "complete":
+        raise HTTPException(status_code=409, detail={"message": "只有完成的工作可以重生指定分段。"})
+
     output_dir = Path(job.output_dir or JOB_ROOT / job_id / "output")
     segments_path = output_dir / "segments.json"
     if not segments_path.exists():
-        raise HTTPException(status_code=404, detail="Segments not found")
+        raise HTTPException(status_code=404, detail={"message": "找不到分段資料。"})
+    segments_payload = json.loads(segments_path.read_text(encoding="utf-8"))
+    target = next((segment for segment in segments_payload.get("segments", []) if int(segment.get("index") or 0) == segment_index), None)
+    if not target:
+        raise HTTPException(status_code=404, detail={"message": "找不到這個分段。"})
 
     user_id = review_user_id(request, response)
-    reviews = load_reviews(job)
-    now = time.time()
-    review = {
-        "segment_index": segment_index,
-        "user_id": user_id,
-        "rating": feedback.rating,
-        "note": feedback.note,
-        "corrected_taigi_text": feedback.corrected_taigi_text,
-        "corrected_tailo_text": feedback.corrected_tailo_text,
-        "corrections": [item.model_dump() for item in feedback.corrections],
-        "updated_at": now,
-    }
-    replaced = False
-    for index, existing in enumerate(reviews):
-        if existing.get("segment_index") == segment_index and existing.get("user_id") == user_id:
-            review["created_at"] = existing.get("created_at", now)
-            reviews[index] = review
-            replaced = True
-            break
-    if not replaced:
-        review["created_at"] = now
-        reviews.append(review)
-    save_reviews(job, reviews)
-    stats = segment_review_stats(reviews, segment_index, user_id)
+    if payload.rating:
+        feedback = SegmentFeedback(
+            rating=payload.rating,
+            note=payload.note,
+            corrected_taigi_text=payload.corrected_taigi_text,
+            corrected_tailo_text=payload.corrected_tailo_text,
+            corrections=payload.corrections,
+        )
+        persist_segment_feedback(job, segment_index, feedback, user_id)
+        segments_payload = json.loads(segments_path.read_text(encoding="utf-8"))
+        target = next(segment for segment in segments_payload.get("segments", []) if int(segment.get("index") or 0) == segment_index)
 
+    new_taigi = (payload.corrected_taigi_text or target.get("corrected_taigi_text") or target.get("taigi_text") or "").strip()
+    if not new_taigi:
+        raise HTTPException(status_code=400, detail={"message": "請先提供修正後台語文字，才能重新產生這段語音。"})
+    new_tailo = (payload.corrected_tailo_text or target.get("corrected_tailo_text") or "").strip() or tailo_for(new_taigi)
+
+    admin_or_token = is_authorized(request, taigi_web_token_cookie, authorization)
+
+    def regenerate_worker():
+        previous_stage = job.stage
+        previous_progress = job.progress
+        app_data["jobs"].update(job_id, stage=f"Regenerating segment {segment_index}", progress=90)
+        try:
+            regenerated, audio_path, video_path, zip_path = regenerate_job_segments_from_texts(
+                job,
+                segments_payload,
+                {segment_index: (new_taigi, new_tailo)},
+            )
+            target_segment = regenerated[0]
+            updated_job = app_data["jobs"].update(
+                job_id,
+                stage="Complete",
+                progress=100,
+                taigi_text="\n".join(str(segment.get("taigi_text") or "") for segment in segments_payload.get("segments", [])),
+                tailo_text="\n".join(str(segment.get("tailo_text") or "") for segment in segments_payload.get("segments", [])),
+                audio_path=str(audio_path),
+                video_path=str(video_path or job.video_path) if (video_path or job.video_path) else None,
+                zip_path=str(zip_path),
+                error=None,
+            )
+            record_stat_action("regenerate_segment", "segment", f"{job_id}:{segment_index}")
+            schedule_public_snapshot_export()
+            return {
+                "regenerated": True,
+                "job": present_job(updated_job, admin_or_token, user_id),
+                "segment": target_segment,
+            }
+        except Exception as exc:
+            app_data["jobs"].update(job_id, stage=previous_stage, progress=previous_progress, error=str(exc))
+            raise HTTPException(status_code=500, detail={"message": f"重新產生分段失敗：{exc}"}) from exc
+
+    return await asyncio.to_thread(regenerate_worker)
+
+
+@app.post("/jobs/{job_id}/segments/regenerate-reviewed")
+async def regenerate_reviewed_segments(
+    job_id: str,
+    payload: SegmentBatchRegenerateRequest,
+    request: Request,
+    taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
+):
+    job = app_data["jobs"].get(job_id)
+    require_job_access(job, request, taigi_web_token_cookie, authorization)
+    if job.status != "complete":
+        raise HTTPException(status_code=409, detail={"message": "只有完成的工作可以批次重生分段。"})
+
+    output_dir = Path(job.output_dir or JOB_ROOT / job_id / "output")
+    segments_path = output_dir / "segments.json"
+    if not segments_path.exists():
+        raise HTTPException(status_code=404, detail={"message": "找不到分段資料。"})
     segments_payload = json.loads(segments_path.read_text(encoding="utf-8"))
-    for segment in segments_payload.get("segments", []):
-        if segment.get("index") == segment_index:
-            segment["rating"] = stats["my_rating"]
-            segment["my_rating"] = stats["my_rating"]
-            segment["average_rating"] = stats["average_rating"]
-            segment["rating_count"] = stats["rating_count"]
-            segment["feedback_count"] = stats["rating_count"]
-            if feedback.corrected_taigi_text.strip():
-                segment["corrected_taigi_text"] = feedback.corrected_taigi_text.strip()
-            if feedback.corrected_tailo_text.strip():
-                segment["corrected_tailo_text"] = feedback.corrected_tailo_text.strip()
-            break
-    segments_path.write_text(json.dumps(segments_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    remember_feedback(job_id, segment_index, feedback)
-    record_stat_action("rate_segment", "segment", f"{job_id}:{segment_index}")
-    return {"saved": True, "review": review, "stats": stats}
+    segment_by_index = {
+        int(segment.get("index") or 0): segment
+        for segment in segments_payload.get("segments", [])
+    }
+
+    replacements: dict[int, tuple[str, str]] = {}
+    for review in sorted(load_reviews(job), key=lambda item: item.get("updated_at") or item.get("created_at") or 0):
+        idx = int(review.get("segment_index") or 0)
+        if idx <= 0 or idx not in segment_by_index:
+            continue
+        corrected_taigi = str(review.get("corrected_taigi_text") or "").strip()
+        corrected_tailo = str(review.get("corrected_tailo_text") or "").strip()
+        if payload.only_with_corrections and not corrected_taigi:
+            continue
+        segment = segment_by_index[idx]
+        taigi_text = corrected_taigi or str(segment.get("corrected_taigi_text") or segment.get("taigi_text") or "").strip()
+        tailo_text = corrected_tailo or str(segment.get("corrected_tailo_text") or segment.get("tailo_text") or "").strip()
+        if taigi_text:
+            replacements[idx] = (taigi_text, tailo_text)
+
+    if not replacements:
+        raise HTTPException(status_code=400, detail={"message": "目前沒有已儲存回饋的分段可重新產生。"})
+
+    admin_or_token = is_authorized(request, taigi_web_token_cookie, authorization)
+    user_id = review_user_id(request)
+
+    def regenerate_reviewed_worker():
+        previous_stage = job.stage
+        previous_progress = job.progress
+        app_data["jobs"].update(job_id, stage=f"Regenerating {len(replacements)} reviewed segments", progress=88)
+        try:
+            regenerated, audio_path, video_path, zip_path = regenerate_job_segments_from_texts(job, segments_payload, replacements)
+            updated_job = app_data["jobs"].update(
+                job_id,
+                stage="Complete",
+                progress=100,
+                taigi_text="\n".join(str(segment.get("taigi_text") or "") for segment in segments_payload.get("segments", [])),
+                tailo_text="\n".join(str(segment.get("tailo_text") or "") for segment in segments_payload.get("segments", [])),
+                audio_path=str(audio_path),
+                video_path=str(video_path or job.video_path) if (video_path or job.video_path) else None,
+                zip_path=str(zip_path),
+                error=None,
+            )
+            for segment in regenerated:
+                record_stat_action("regenerate_segment", "segment", f"{job_id}:{segment.get('index')}")
+            record_stat_action("regenerate_reviewed_segments", "job", job_id, metadata={"segment_count": len(regenerated)})
+            schedule_public_snapshot_export()
+            return {
+                "regenerated": True,
+                "segment_count": len(regenerated),
+                "segments": regenerated,
+                "job": present_job(updated_job, admin_or_token, user_id),
+            }
+        except Exception as exc:
+            app_data["jobs"].update(job_id, stage=previous_stage, progress=previous_progress, error=str(exc))
+            raise HTTPException(status_code=500, detail={"message": f"重新產生已回饋分段失敗：{exc}"}) from exc
+
+    return await asyncio.to_thread(regenerate_reviewed_worker)
 
 
 @app.post("/jobs/{job_id}/regenerate")

@@ -1104,6 +1104,7 @@ interface Segment {
   my_note?: string;
   corrected_taigi_text?: string;
   corrected_tailo_text?: string;
+  regenerated_at?: number;
 }
 
 interface SegmentReviewPayload {
@@ -1506,10 +1507,12 @@ function App() {
   const [segments, setSegments] = useState<Segment[]>([]);
   const [segmentJobId, setSegmentJobId] = useState<string | null>(null);
   const [feedbackDrafts, setFeedbackDrafts] = useState<Record<number, SegmentReviewPayload>>({});
+  const [regeneratingSegments, setRegeneratingSegments] = useState<Record<number, boolean>>({});
   const [jobError, setJobError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [generatingSentence, setGeneratingSentence] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [regeneratingReviewed, setRegeneratingReviewed] = useState(false);
   const [exportingPostgres, setExportingPostgres] = useState(false);
   const [postgresExportResult, setPostgresExportResult] = useState<PostgresExportResult | null>(null);
   const [syncingStatic, setSyncingStatic] = useState(false);
@@ -1551,11 +1554,17 @@ function App() {
     || (asset.id === 'legacy' ? word.static_media?.[kind] : undefined)
     || `/words/${word.id}/assets/${asset.id}/download/${kind}`
   );
-  const segmentAudioSrc = (job: Job, segmentIndex: number) => (
-    job.static_media?.segments
-      ? `${STATIC_DATA_BASE}/media/jobs/${job.id}/segments/seg_${String(segmentIndex).padStart(2, '0')}.wav`
-      : `/jobs/${job.id}/segments/${segmentIndex}/audio`
+  const versionedUrl = (url: string, version?: number) => (
+    version ? `${url}${url.includes('?') ? '&' : '?'}v=${Math.floor(version)}` : url
   );
+  const segmentAudioSrc = (job: Job, segment: Segment | number) => {
+    const segmentIndex = typeof segment === 'number' ? segment : segment.index;
+    const version = typeof segment === 'number' ? undefined : segment.regenerated_at;
+    const url = job.static_media?.segments
+      ? `${STATIC_DATA_BASE}/media/jobs/${job.id}/segments/seg_${String(segmentIndex).padStart(2, '0')}.wav`
+      : `/jobs/${job.id}/segments/${segmentIndex}/audio`;
+    return versionedUrl(url, version);
+  };
 
   const loadAuth = async () => {
     const res = await axios.get<AuthStatus>('/auth/status');
@@ -2035,6 +2044,93 @@ function App() {
     } catch (error) {
       const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
       message.error(detail || '儲存失敗');
+    }
+  };
+
+  const segmentFeedbackBody = (draft: SegmentReviewPayload) => ({
+    ...draft,
+    corrections: draft.corrections.filter((correction) => (
+      correction.source_phrase.trim()
+      || correction.taigi_correction.trim()
+      || correction.tailo_correction.trim()
+      || correction.note.trim()
+    )),
+  });
+
+  const regenerateSegment = async (segment: Segment) => {
+    const draft = feedbackDrafts[segment.index];
+    if (!selectedJob || !draft) {
+      message.warning('分段資料尚未載入完成');
+      return;
+    }
+    setRegeneratingSegments((current) => ({ ...current, [segment.index]: true }));
+    setJobError(null);
+    const messageKey = `regenerate-segment-${selectedJob.id}-${segment.index}`;
+    message.loading({
+      key: messageKey,
+      content: `Segment ${segment.index} 正在重新產生語音，完成後會重建完整語音與影片`,
+      duration: 0,
+    });
+    try {
+      const res = await axios.post<{ regenerated: boolean; job: Job; segment: Segment }>(
+        `/jobs/${selectedJob.id}/segments/${segment.index}/regenerate`,
+        segmentFeedbackBody(draft),
+        { timeout: 600000 },
+      );
+      setJobs((current) => current.map((job) => (job.id === res.data.job.id ? { ...job, ...res.data.job } : job)));
+      await loadSegments(selectedJob.id);
+      await loadJobs().catch(() => undefined);
+      await loadWords().catch(() => undefined);
+      await loadStats().catch(() => undefined);
+      message.success({
+        key: messageKey,
+        content: `Segment ${segment.index} 已重新產生語音，完整語音與影片已更新`,
+      });
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      const reason = detail && typeof detail === 'object'
+        ? detail.message || '重新產生分段失敗。'
+        : detail || '重新產生分段失敗。';
+      setJobError(String(reason));
+      message.error({ key: messageKey, content: String(reason) });
+    } finally {
+      setRegeneratingSegments((current) => ({ ...current, [segment.index]: false }));
+    }
+  };
+
+  const regenerateReviewedSegments = async () => {
+    if (!selectedJob) return;
+    setRegeneratingReviewed(true);
+    setJobError(null);
+    const messageKey = `regenerate-reviewed-${selectedJob.id}`;
+    message.loading({
+      key: messageKey,
+      content: '正在重新產生所有已儲存回饋的分段，完成後會重建完整語音與影片',
+      duration: 0,
+    });
+    try {
+      const res = await axios.post<{ regenerated: boolean; segment_count: number; job: Job }>(
+        `/jobs/${selectedJob.id}/segments/regenerate-reviewed`,
+        {},
+        { timeout: 1200000 },
+      );
+      setJobs((current) => current.map((job) => (job.id === res.data.job.id ? { ...job, ...res.data.job } : job)));
+      await loadSegments(selectedJob.id);
+      await loadJobs().catch(() => undefined);
+      await loadStats().catch(() => undefined);
+      message.success({
+        key: messageKey,
+        content: `已重新產生 ${res.data.segment_count} 個有回饋的分段，並重建完整語音與影片`,
+      });
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      const reason = detail && typeof detail === 'object'
+        ? detail.message || '重新產生已回饋分段失敗。'
+        : detail || '重新產生已回饋分段失敗。';
+      setJobError(String(reason));
+      message.error({ key: messageKey, content: String(reason) });
+    } finally {
+      setRegeneratingReviewed(false);
     }
   };
 
@@ -2572,6 +2668,9 @@ function App() {
                             <Button href={jobMediaSrc(selectedJob, 'taigi')}>台語稿</Button>
                             <Button href={jobMediaSrc(selectedJob, 'tailo')}>台羅</Button>
                             <Button href={jobMediaSrc(selectedJob, 'segments')}>分段 JSON</Button>
+                            <Button onClick={regenerateReviewedSegments} loading={regeneratingReviewed}>
+                              重生已回饋段落
+                            </Button>
                             <Button onClick={regenerateFromCorrections} loading={regenerating}>
                               用修正稿重新生成
                             </Button>
@@ -2602,7 +2701,7 @@ function App() {
                                         )}
                                         {!!segment.my_rating && <Tag color="gold">我的評分 {segment.my_rating}</Tag>}
                                       </Space>
-                                      <Button href={segmentAudioSrc(selectedJob, segment.index)} icon={<DownloadOutlined />}>
+                                      <Button href={segmentAudioSrc(selectedJob, segment)} icon={<DownloadOutlined />}>
                                         WAV
                                       </Button>
                                     </Flex>
@@ -2610,7 +2709,7 @@ function App() {
                                       controls
                                       preload="none"
                                       style={{ width: '100%', marginTop: 10 }}
-                                      src={segmentAudioSrc(selectedJob, segment.index)}
+                                      src={segmentAudioSrc(selectedJob, segment)}
                                     />
                                     <Space size={8} wrap className="share-actions">
                                       <Button size="small" icon={<CopyOutlined />} onClick={() => shareMedia(`segment:${selectedJob.id}:${segment.index}`, `${jobDisplayTitle(selectedJob)} Segment ${segment.index}`, 'copy')}>複製這段連結</Button>
@@ -2693,6 +2792,13 @@ function App() {
                                           <Button onClick={() => addCorrection(segment.index)}>新增修正詞</Button>
                                           <Button type="primary" onClick={() => submitFeedback(segment)}>
                                             儲存這段回饋
+                                          </Button>
+                                          <Button
+                                            icon={<AudioOutlined />}
+                                            loading={!!regeneratingSegments[segment.index]}
+                                            onClick={() => regenerateSegment(segment)}
+                                          >
+                                            重新產生這段語音
                                           </Button>
                                         </Flex>
                                       </Space>
