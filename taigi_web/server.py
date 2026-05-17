@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 import random
@@ -15,16 +14,18 @@ import uuid
 import zipfile
 from contextlib import asynccontextmanager
 from email.message import EmailMessage
+from email.utils import formatdate
+from html import escape as xml_escape
 from hashlib import sha256
 from ipaddress import ip_address
 from pathlib import Path
 from queue import PriorityQueue
 from threading import Lock, Thread
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Callable, Literal, Optional
 from urllib.parse import quote, urlencode
 
 from fastapi import Cookie, FastAPI, Form, Header, HTTPException, Request, Response
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response as FastAPIResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel, Field
@@ -82,10 +83,58 @@ TRANSLATION_MEMORY = Path(os.environ.get("TAIGI_WEB_TRANSLATION_MEMORY", JOB_ROO
 WORD_DB = Path(os.environ.get("TAIGI_WEB_WORD_DB", JOB_ROOT / "word_db.json"))
 WORD_ASSET_DIR = Path(os.environ.get("TAIGI_WEB_WORD_ASSET_DIR", JOB_ROOT / "word_assets"))
 WORD_AUTO_GENERATE_INTERVAL_SECONDS = int(os.environ.get("TAIGI_WEB_WORD_AUTO_GENERATE_INTERVAL_SECONDS", "1800"))
+SUBPROCESS_TIMEOUT_SECONDS = int(os.environ.get("TAIGI_WEB_SUBPROCESS_TIMEOUT_SECONDS", "600"))
+VIDEO_RENDER_TIMEOUT_SECONDS = int(os.environ.get("TAIGI_WEB_VIDEO_RENDER_TIMEOUT_SECONDS", "1800"))
+COMMAND_HEARTBEAT_SECONDS = int(os.environ.get("TAIGI_WEB_COMMAND_HEARTBEAT_SECONDS", "30"))
+RUNNING_JOB_STALE_SECONDS = int(os.environ.get("TAIGI_WEB_RUNNING_JOB_STALE_SECONDS", "1800"))
+JOB_WATCHDOG_INTERVAL_SECONDS = int(os.environ.get("TAIGI_WEB_JOB_WATCHDOG_INTERVAL_SECONDS", "60"))
+DATA_CLEANUP_INTERVAL_SECONDS = int(os.environ.get("TAIGI_WEB_DATA_CLEANUP_INTERVAL_SECONDS", "86400"))
 STATS_PATH = Path(os.environ.get("TAIGI_WEB_STATS", JOB_ROOT / "stats.json"))
 SQLITE_DB = Path(os.environ.get("TAIGI_WEB_SQLITE_DB", JOB_ROOT / "taigi_web.sqlite3"))
 PUBLIC_STATIC_DIR = Path(os.environ.get("TAIGI_WEB_PUBLIC_STATIC_DIR", JOB_ROOT / "public_static"))
 PUBLIC_STATIC_URL = os.environ.get("TAIGI_WEB_PUBLIC_STATIC_URL", "/static-data").rstrip("/")
+
+UNSAFE_TTS_CHARS = {
+    "\u180e": "Mongolian vowel separator",
+    "\u200b": "zero width space",
+    "\u200c": "zero width non-joiner",
+    "\u200d": "zero width joiner",
+    "\u2060": "word joiner",
+    "\ufeff": "byte order mark",
+    "\ufffc": "object replacement character",
+    "\ufffd": "replacement character",
+}
+UNSAFE_TTS_TRANSLATION = str.maketrans({char: "" for char in UNSAFE_TTS_CHARS})
+
+
+def sanitize_text_for_tts(text: str) -> str:
+    if not text:
+        return text
+    return text.translate(UNSAFE_TTS_TRANSLATION)
+
+
+def sanitize_state_value(value):
+    if isinstance(value, str):
+        cleaned = sanitize_text_for_tts(value)
+        return cleaned, sum(value.count(char) for char in UNSAFE_TTS_CHARS)
+    if isinstance(value, list):
+        changed_count = 0
+        cleaned_items = []
+        for item in value:
+            cleaned_item, count = sanitize_state_value(item)
+            cleaned_items.append(cleaned_item)
+            changed_count += count
+        return cleaned_items, changed_count
+    if isinstance(value, dict):
+        changed_count = 0
+        cleaned_payload = {}
+        for key, item in value.items():
+            cleaned_key, key_count = sanitize_state_value(key)
+            cleaned_item, item_count = sanitize_state_value(item)
+            cleaned_payload[cleaned_key] = cleaned_item
+            changed_count += key_count + item_count
+        return cleaned_payload, changed_count
+    return value, 0
 OBJECT_STORAGE_BUCKET = os.environ.get("TAIGI_WEB_OBJECT_STORAGE_BUCKET", "").strip()
 OBJECT_STORAGE_PREFIX = os.environ.get("TAIGI_WEB_OBJECT_STORAGE_PREFIX", "taigi-public").strip().strip("/")
 OBJECT_STORAGE_ENDPOINT_URL = os.environ.get("TAIGI_WEB_OBJECT_STORAGE_ENDPOINT_URL", "").strip().rstrip("/")
@@ -131,6 +180,12 @@ class CreateJobRequest(BaseModel):
     make_video: bool = True
     copy_to_onedrive: bool = DEFAULT_COPY_TO_ONEDRIVE
 
+    def model_post_init(self, __context):
+        for field in ("title", "chinese_text", "taigi_override", "control"):
+            value = getattr(self, field)
+            if isinstance(value, str):
+                setattr(self, field, sanitize_text_for_tts(value))
+
 
 class MagicLinkRequest(BaseModel):
     email: str
@@ -144,12 +199,30 @@ class AnonymousNicknameRequest(BaseModel):
     nickname: str
 
 
+def env_choice(name: str, default: str, choices: set[str]) -> str:
+    value = os.environ.get(name, default).strip() or default
+    return value if value in choices else default
+
+
+def env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)) or default)
+    except ValueError:
+        return default
+
+
 class AppSettings(BaseModel):
     default_reference_voice_mode: Literal["default", "random"] = "default"
     public_rate_limit_seconds: int = RATE_LIMIT_SECONDS
     api_access_token: str = ""
     postgres_dsn: str = POSTGRES_DSN
     postgres_schema: str = POSTGRES_SCHEMA
+    translator_backend: Literal["rule", "tw_hokkien_llm"] = env_choice("TAIGI_WEB_TRANSLATOR_BACKEND", "rule", {"rule", "tw_hokkien_llm"})
+    translator_api_base_url: str = os.environ.get("TAIGI_WEB_TRANSLATOR_API_BASE_URL", "").strip()
+    translator_api_key: str = os.environ.get("TAIGI_WEB_TRANSLATOR_API_KEY", "").strip()
+    translator_model: str = os.environ.get("TAIGI_WEB_TRANSLATOR_MODEL", "").strip()
+    translator_target_language: Literal["HAN", "HL", "POJ"] = env_choice("TAIGI_WEB_TRANSLATOR_TARGET_LANGUAGE", "HAN", {"HAN", "HL", "POJ"})
+    translator_timeout_seconds: int = env_int("TAIGI_WEB_TRANSLATOR_TIMEOUT_SECONDS", 90)
     llm_api_base_url: str = os.environ.get("TAIGI_WEB_LLM_API_BASE_URL", "").strip()
     llm_api_key: str = os.environ.get("TAIGI_WEB_LLM_API_KEY", "").strip()
     llm_model: str = os.environ.get("TAIGI_WEB_LLM_MODEL", "").strip()
@@ -195,7 +268,7 @@ class StaticSyncResult(BaseModel):
 
 class Job(BaseModel):
     id: str
-    kind: Literal["script", "word_asset"] = "script"
+    kind: Literal["script", "word_asset", "segment_regeneration", "maintenance"] = "script"
     owner_id: Optional[str] = None
     title: str
     status: Literal["queued", "running", "complete", "failed"]
@@ -224,6 +297,7 @@ class SegmentCorrection(BaseModel):
     taigi_correction: str = ""
     tailo_correction: str = ""
     note: str = ""
+    status: Literal["", "problem", "ok"] = ""
 
 
 class SegmentFeedback(BaseModel):
@@ -246,6 +320,10 @@ class SegmentBatchRegenerateRequest(BaseModel):
     only_with_corrections: bool = False
 
 
+class RetryJobRequest(BaseModel):
+    mode: Literal["restart", "resume"] = "restart"
+
+
 class WordIssueRequest(BaseModel):
     reason: str = ""
 
@@ -265,6 +343,15 @@ class WordRatingRequest(BaseModel):
 class WordAssetRatingRequest(BaseModel):
     rating: int
     note: str = ""
+
+
+class WordTokenReviewItem(BaseModel):
+    source: str
+    status: Literal["problem", "ok"]
+
+
+class WordTokenReviewRequest(BaseModel):
+    tokens: list[WordTokenReviewItem] = []
 
 
 class WordTranslationRequest(BaseModel):
@@ -387,7 +474,8 @@ class JobStore:
         db_save_job(job)
         path = self._job_path(job.id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(job.model_dump_json(indent=2), encoding="utf-8")
+        payload, _ = sanitize_state_value(job.model_dump())
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         if job.status in {"complete", "failed"}:
             schedule_public_snapshot_export()
 
@@ -395,7 +483,7 @@ class JobStore:
         with self._lock:
             self._jobs.clear()
             for job in db_load_jobs():
-                if job.status in {"queued", "running"}:
+                if job.status == "running":
                     job = job.model_copy(update={
                         "status": "failed",
                         "stage": "Interrupted",
@@ -410,7 +498,7 @@ class JobStore:
                     job = Job.model_validate_json(job_path.read_text(encoding="utf-8"))
                     if job.id in self._jobs:
                         continue
-                    if job.status in {"queued", "running"}:
+                    if job.status == "running":
                         job = job.model_copy(update={
                             "status": "failed",
                             "stage": "Interrupted",
@@ -485,13 +573,62 @@ def db_get_json(key: str, default):
             return default
 
 
+def db_has_json(key: str) -> bool:
+    with db_lock, db_connect() as conn:
+        row = conn.execute("SELECT 1 FROM kv WHERE key = ?", (key,)).fetchone()
+        return bool(row)
+
+
 def db_set_json(key: str, value):
+    value, _ = sanitize_state_value(value)
     with db_lock, db_connect() as conn:
         conn.execute(
             "INSERT INTO kv(key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
             (key, json.dumps(value, ensure_ascii=False), time.time()),
         )
         conn.commit()
+
+
+def json_state_key(path: Path) -> str:
+    path = path.resolve()
+    try:
+        relative = path.relative_to(JOB_ROOT.resolve())
+        return f"file:{relative.as_posix()}"
+    except ValueError:
+        return f"file:{sha256(str(path).encode('utf-8')).hexdigest()}:{path.name}"
+
+
+def write_json_file(path: Path, payload: dict):
+    payload, _ = sanitize_state_value(payload)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def load_json_state(path: Path, default: dict, *, key: Optional[str] = None, create: bool = False) -> dict:
+    state_key = key or json_state_key(path)
+    stored = db_get_json(state_key, None)
+    if stored is not None:
+        if not path.exists():
+            write_json_file(path, stored)
+        return stored
+    if path.exists():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            payload = default
+        db_set_json(state_key, payload)
+        return payload
+    if create:
+        save_json_state(path, default, key=state_key)
+    return default
+
+
+def save_json_state(path: Path, payload: dict, *, key: Optional[str] = None):
+    state_key = key or json_state_key(path)
+    db_set_json(state_key, payload)
+    write_json_file(path, payload)
 
 
 def db_load_jobs() -> list[Job]:
@@ -507,10 +644,11 @@ def db_load_jobs() -> list[Job]:
 
 
 def db_save_job(job: Job):
+    payload, _ = sanitize_state_value(job.model_dump())
     with db_lock, db_connect() as conn:
         conn.execute(
             "INSERT INTO jobs(id, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-            (job.id, job.model_dump_json(), time.time()),
+            (job.id, json.dumps(payload, ensure_ascii=False), time.time()),
         )
         conn.commit()
 
@@ -690,6 +828,245 @@ def next_job_counter() -> int:
 
 def enqueue_job(priority: int, job_id: str, payload: Optional[CreateJobRequest] = None):
     job_queue.put((priority, next_job_counter(), job_id, payload))
+
+
+STATE_JSON_FILENAMES = {"segments.json", "reviews.json", "subtitles.json"}
+
+
+def sync_json_file_to_db(path: Path, *, key: Optional[str] = None) -> bool:
+    state_key = key or json_state_key(path)
+    if db_has_json(state_key) or not path.exists():
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    db_set_json(state_key, payload)
+    return True
+
+
+def sync_state_files_to_db() -> dict:
+    JOB_ROOT.mkdir(parents=True, exist_ok=True)
+    synced = {
+        "top_level": 0,
+        "job_state": 0,
+        "jobs": 0,
+    }
+    for key, path in (
+        ("auth_store", AUTH_STORE),
+        ("settings", SETTINGS_PATH),
+        ("stats", STATS_PATH),
+        ("translation_memory", TRANSLATION_MEMORY),
+        ("word_db", WORD_DB),
+    ):
+        if sync_json_file_to_db(path, key=key):
+            synced["top_level"] += 1
+    for job_path in JOB_ROOT.glob("*/job.json"):
+        try:
+            job = Job.model_validate_json(job_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        db_save_job(job)
+        synced["jobs"] += 1
+    for json_path in JOB_ROOT.glob("*/output/*.json"):
+        if json_path.name in STATE_JSON_FILENAMES and sync_json_file_to_db(json_path):
+            synced["job_state"] += 1
+    db_set_json("state_sync_last", {**synced, "synced_at": time.time()})
+    return synced
+
+
+TEXT_STATE_SUFFIXES = {".json", ".txt", ".srt", ".vtt"}
+
+
+def cleanup_unsafe_tts_characters() -> dict:
+    result = {
+        "removed": 0,
+        "files_changed": 0,
+        "kv_rows_changed": 0,
+        "job_rows_changed": 0,
+        "memory_jobs_changed": 0,
+        "started_at": time.time(),
+        "characters": [
+            {"codepoint": f"U+{ord(char):04X}", "name": name}
+            for char, name in UNSAFE_TTS_CHARS.items()
+        ],
+    }
+
+    if "jobs" in app_data:
+        jobs: JobStore = app_data["jobs"]
+        with jobs._lock:
+            for job_id, job in list(jobs._jobs.items()):
+                payload, count = sanitize_state_value(job.model_dump())
+                if not count:
+                    continue
+                cleaned_job = Job.model_validate(payload)
+                jobs._jobs[job_id] = cleaned_job
+                jobs._persist(cleaned_job)
+                result["removed"] += count
+                result["memory_jobs_changed"] += 1
+
+    for root in (JOB_ROOT,):
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in TEXT_STATE_SUFFIXES:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            count = sum(text.count(char) for char in UNSAFE_TTS_CHARS)
+            if not count:
+                continue
+            if path.suffix.lower() == ".json":
+                try:
+                    payload = json.loads(text)
+                    cleaned_payload, count = sanitize_state_value(payload)
+                    write_json_file(path, cleaned_payload)
+                except Exception:
+                    path.write_text(sanitize_text_for_tts(text), encoding="utf-8")
+            else:
+                path.write_text(sanitize_text_for_tts(text), encoding="utf-8")
+            result["removed"] += count
+            result["files_changed"] += 1
+
+    with db_lock, db_connect() as conn:
+        for table, key_col, value_col, result_key in (
+            ("kv", "key", "value", "kv_rows_changed"),
+            ("jobs", "id", "value", "job_rows_changed"),
+        ):
+            rows = conn.execute(f"SELECT {key_col}, {value_col} FROM {table}").fetchall()
+            for row in rows:
+                value = row[value_col]
+                count = sum(str(value).count(char) for char in UNSAFE_TTS_CHARS)
+                if not count:
+                    continue
+                try:
+                    payload = json.loads(value)
+                    cleaned_payload, count = sanitize_state_value(payload)
+                    cleaned_value = json.dumps(cleaned_payload, ensure_ascii=False)
+                except Exception:
+                    cleaned_value = sanitize_text_for_tts(str(value))
+                conn.execute(
+                    f"UPDATE {table} SET {value_col} = ?, updated_at = ? WHERE {key_col} = ?",
+                    (cleaned_value, time.time(), row[key_col]),
+                )
+                result["removed"] += count
+                result[result_key] += 1
+        conn.commit()
+
+    result["completed_at"] = time.time()
+    result["elapsed_seconds"] = round(result["completed_at"] - result["started_at"], 3)
+    db_set_json("unsafe_tts_cleanup_last", result)
+    schedule_public_snapshot_export(delay=0.1)
+    return result
+
+
+def enqueue_segment_regeneration_job(
+    source_job: Job,
+    owner_id: str,
+    replacements: dict[int, dict[str, str]],
+    priority: int,
+) -> Job:
+    now = time.time()
+    indexes = sorted(replacements)
+    label = f"分段 {indexes[0]}" if len(indexes) == 1 else f"{len(indexes)} 個已回饋分段"
+    job_id = uuid.uuid4().hex
+    taigi_text = "\n".join(replacements[index].get("taigi_text", "") for index in indexes)
+    tailo_text = "\n".join(replacements[index].get("tailo_text", "") for index in indexes)
+    job = Job(
+        id=job_id,
+        kind="segment_regeneration",
+        owner_id=owner_id,
+        title=f"重生{label} · {source_job.title}",
+        status="queued",
+        stage="Queued",
+        progress=0,
+        created_at=now,
+        updated_at=now,
+        chinese_text=source_job.chinese_text,
+        taigi_text=taigi_text,
+        tailo_text=tailo_text,
+        segment_count=len(indexes),
+        metadata={
+            "source_job_id": source_job.id,
+            "segment_indexes": indexes,
+            "replacements": [
+                {
+                    "index": index,
+                    "taigi_text": replacements[index].get("taigi_text", ""),
+                    "tailo_text": replacements[index].get("tailo_text", ""),
+                    "synthesis_text": replacements[index].get("synthesis_text", ""),
+                    "synthesis_source": replacements[index].get("synthesis_source", ""),
+                }
+                for index in indexes
+            ],
+            "requester_id": owner_id,
+        },
+    )
+    app_data["jobs"].add(job)
+    enqueue_job(priority, job_id, None)
+    return job
+
+
+def retry_payload_for_script_job(job: Job) -> CreateJobRequest:
+    stored = job.metadata.get("create_payload") if isinstance(job.metadata, dict) else None
+    if isinstance(stored, dict):
+        try:
+            return CreateJobRequest.model_validate(stored)
+        except Exception:
+            pass
+    return CreateJobRequest(
+        title=job.title,
+        chinese_text=job.chinese_text,
+        taigi_override="",
+        reference_voice_mode=load_settings().default_reference_voice_mode,
+        copy_to_onedrive=DEFAULT_COPY_TO_ONEDRIVE,
+    )
+
+
+def enqueue_retry_job(job: Job, priority: int) -> tuple[Job, Optional[CreateJobRequest]]:
+    if job.status != "failed":
+        raise HTTPException(status_code=409, detail={"message": "只有失敗的工作可以重新執行。"})
+    payload: Optional[CreateJobRequest] = None
+    updates = {
+        "status": "queued",
+        "stage": "Queued for retry",
+        "progress": 0,
+        "started_at": None,
+        "completed_at": None,
+        "elapsed_seconds": None,
+        "error": None,
+    }
+    if job.kind == "script":
+        payload = retry_payload_for_script_job(job)
+        updates["metadata"] = {**job.metadata, "create_payload": payload.model_dump(), "retry_of": job.id}
+    elif job.kind == "word_asset":
+        word_id = str(job.metadata.get("word_id") or "")
+        if not word_id:
+            raise HTTPException(status_code=400, detail={"message": "這筆詞語語音工作缺少詞語資訊，無法重新執行。"})
+        mark_word_generation(
+            word_id,
+            generation_status="queued",
+            generation_stage="重新排入詞語語音佇列",
+            generation_progress=0,
+            generation_error="",
+            generation_job_id=job.id,
+            generation_updated_at=time.time(),
+        )
+    elif job.kind == "segment_regeneration":
+        source_job_id = str(job.metadata.get("source_job_id") or "")
+        if not source_job_id:
+            raise HTTPException(status_code=400, detail={"message": "這筆重生分段工作缺少原始工作資訊，無法重新執行。"})
+        source_job = app_data["jobs"].get(source_job_id)
+        if source_job.status != "complete":
+            raise HTTPException(status_code=409, detail={"message": "原始工作必須完成，才能重新執行分段重生。"})
+    else:
+        raise HTTPException(status_code=400, detail={"message": "這種工作類型無法重新執行。"})
+
+    updated = app_data["jobs"].update(job.id, **updates)
+    enqueue_job(priority, job.id, payload)
+    return updated, payload
 
 
 def word_job_position(word_id: str) -> int:
@@ -948,6 +1325,128 @@ def run_word_asset_job(job_id: str):
         )
 
 
+def run_segment_regeneration_job(job_id: str):
+    jobs: JobStore = app_data["jobs"]
+    job = jobs.get(job_id)
+    started_at = time.time()
+    try:
+        source_job_id = str(job.metadata.get("source_job_id") or "")
+        if not source_job_id:
+            raise ValueError("Missing source_job_id metadata.")
+        source_job = jobs.get(source_job_id)
+        if source_job.status != "complete":
+            raise ValueError("Only completed source jobs can regenerate segments.")
+        output_dir = Path(source_job.output_dir or JOB_ROOT / source_job_id / "output")
+        segments_path = output_dir / "segments.json"
+        if not state_json_exists(segments_path):
+            raise FileNotFoundError("Source segments.json not found.")
+
+        replacement_rows = job.metadata.get("replacements") or []
+        replacements: dict[int, dict[str, str]] = {}
+        for row in replacement_rows:
+            idx = int(row.get("index") or 0)
+            taigi_text = str(row.get("taigi_text") or "").strip()
+            tailo_text = str(row.get("tailo_text") or "").strip()
+            synthesis_text = str(row.get("synthesis_text") or taigi_text or tailo_text).strip()
+            if idx > 0 and synthesis_text:
+                replacements[idx] = {
+                    "taigi_text": taigi_text,
+                    "tailo_text": tailo_text,
+                    "synthesis_text": synthesis_text,
+                    "synthesis_source": str(row.get("synthesis_source") or ("tailo" if synthesis_text == tailo_text else "taigi")),
+                }
+        if not replacements:
+            raise ValueError("No segment replacements queued.")
+
+        jobs.update(job_id, status="running", stage="Loading source segments", progress=5, started_at=started_at)
+        segments_payload = load_state_json_file(segments_path, {"segments": []})
+
+        def update_progress(stage: str, progress: int):
+            jobs.update(job_id, stage=stage, progress=progress)
+
+        regenerated, audio_path, video_path, zip_path = regenerate_job_segments_from_texts(
+            source_job,
+            segments_payload,
+            replacements,
+            progress_callback=update_progress,
+        )
+        taigi_text = "\n".join(str(segment.get("taigi_text") or "") for segment in segments_payload.get("segments", []))
+        tailo_text = "\n".join(str(segment.get("tailo_text") or "") for segment in segments_payload.get("segments", []))
+        updated_source = jobs.update(
+            source_job_id,
+            stage="Complete",
+            progress=100,
+            taigi_text=taigi_text,
+            tailo_text=tailo_text,
+            audio_path=str(audio_path),
+            video_path=str(video_path or source_job.video_path) if (video_path or source_job.video_path) else None,
+            zip_path=str(zip_path),
+            error=None,
+        )
+        for segment in regenerated:
+            record_stat_action("regenerate_segment", "segment", f"{source_job_id}:{segment.get('index')}")
+        if len(regenerated) > 1:
+            record_stat_action("regenerate_reviewed_segments", "job", source_job_id, metadata={"segment_count": len(regenerated), "job_id": job_id})
+        schedule_public_snapshot_export()
+
+        completed_at = time.time()
+        jobs.update(
+            job_id,
+            status="complete",
+            stage="Complete",
+            progress=100,
+            completed_at=completed_at,
+            elapsed_seconds=round(completed_at - started_at, 3),
+            output_dir=updated_source.output_dir,
+            audio_path=updated_source.audio_path,
+            video_path=updated_source.video_path,
+            zip_path=updated_source.zip_path,
+            taigi_text=taigi_text,
+            tailo_text=tailo_text,
+            metadata={**job.metadata, "completed_source_job_id": source_job_id},
+        )
+    except Exception as exc:
+        completed_at = time.time()
+        jobs.update(
+            job_id,
+            status="failed",
+            stage="Failed",
+            progress=100,
+            error=str(exc),
+            completed_at=completed_at,
+            elapsed_seconds=round(completed_at - started_at, 3),
+        )
+
+
+def run_maintenance_job(job_id: str):
+    jobs: JobStore = app_data["jobs"]
+    started_at = time.time()
+    try:
+        jobs.update(job_id, status="running", stage="Cleaning unsafe TTS characters", progress=10, started_at=started_at)
+        result = cleanup_unsafe_tts_characters()
+        completed_at = time.time()
+        jobs.update(
+            job_id,
+            status="complete",
+            stage="Complete",
+            progress=100,
+            completed_at=completed_at,
+            elapsed_seconds=round(completed_at - started_at, 3),
+            metadata={"cleanup_result": result},
+        )
+    except Exception as exc:
+        completed_at = time.time()
+        jobs.update(
+            job_id,
+            status="failed",
+            stage="Failed",
+            progress=100,
+            error=str(exc),
+            completed_at=completed_at,
+            elapsed_seconds=round(completed_at - started_at, 3),
+        )
+
+
 def job_worker():
     while True:
         _, _, job_id, payload = job_queue.get()
@@ -955,20 +1454,118 @@ def job_worker():
             job = app_data["jobs"].get(job_id)
             if job and job.kind == "word_asset":
                 run_word_asset_job(job_id)
+            elif job and job.kind == "segment_regeneration":
+                run_segment_regeneration_job(job_id)
+            elif job and job.kind == "maintenance":
+                run_maintenance_job(job_id)
             elif payload:
                 run_job(job_id, payload)
         finally:
             job_queue.task_done()
 
 
+def requeue_persisted_queued_jobs():
+    for job in app_data["jobs"].list():
+        if job.status != "queued":
+            continue
+        try:
+            payload = retry_payload_for_script_job(job) if job.kind == "script" else None
+            enqueue_job(10, job.id, payload)
+        except Exception as exc:
+            app_data["jobs"].update(
+                job.id,
+                status="failed",
+                stage="Failed",
+                progress=100,
+                error=f"Could not restore queued job after restart: {exc}",
+                completed_at=time.time(),
+            )
+
+
+def maintenance_job_exists() -> bool:
+    return any(job.kind == "maintenance" and job.status in {"queued", "running"} for job in app_data["jobs"].list())
+
+
+def enqueue_unsafe_tts_cleanup_job(reason: str = "scheduled") -> Job:
+    if maintenance_job_exists():
+        existing = next(job for job in app_data["jobs"].list() if job.kind == "maintenance" and job.status in {"queued", "running"})
+        return existing
+    now = time.time()
+    job = Job(
+        id=uuid.uuid4().hex,
+        kind="maintenance",
+        owner_id="system:maintenance",
+        title="清理不可發音隱藏符號",
+        status="queued",
+        stage="Queued",
+        progress=0,
+        created_at=now,
+        updated_at=now,
+        chinese_text="清理 U+FFFC 等不可發音隱藏符號",
+        metadata={"reason": reason},
+    )
+    app_data["jobs"].add(job)
+    enqueue_job(100, job.id, None)
+    return job
+
+
+def unsafe_tts_cleanup_scheduler():
+    while True:
+        try:
+            last = db_get_json("unsafe_tts_cleanup_last", {})
+            last_completed = float(last.get("completed_at") or 0) if isinstance(last, dict) else 0
+            if time.time() - last_completed >= max(3600, DATA_CLEANUP_INTERVAL_SECONDS):
+                enqueue_unsafe_tts_cleanup_job("scheduled")
+        except Exception as exc:
+            print(f"Unsafe TTS cleanup scheduler failed: {exc}", flush=True)
+        time.sleep(max(300, min(DATA_CLEANUP_INTERVAL_SECONDS, 3600)))
+
+
+def job_watchdog():
+    while True:
+        time.sleep(max(15, JOB_WATCHDOG_INTERVAL_SECONDS))
+        try:
+            now = time.time()
+            for job in app_data["jobs"].list():
+                if job.status != "running":
+                    continue
+                if now - float(job.updated_at or job.started_at or now) < RUNNING_JOB_STALE_SECONDS:
+                    continue
+                app_data["jobs"].update(
+                    job.id,
+                    status="failed",
+                    stage="Failed",
+                    progress=100,
+                    error=f"Job watchdog marked this job failed after {RUNNING_JOB_STALE_SECONDS}s without progress.",
+                    completed_at=now,
+                    elapsed_seconds=round(now - float(job.started_at or job.created_at or now), 3),
+                )
+                if job.kind == "word_asset":
+                    word_id = str(job.metadata.get("word_id") or "")
+                    if word_id:
+                        mark_word_generation(
+                            word_id,
+                            generation_status="failed",
+                            generation_stage="詞語語音生成逾時",
+                            generation_progress=100,
+                            generation_error="Job watchdog marked this word asset job failed.",
+                        )
+        except Exception as exc:
+            print(f"Job watchdog failed: {exc}", flush=True)
+
+
 worker_thread = Thread(target=job_worker, daemon=True)
 word_auto_scheduler_thread = Thread(target=word_auto_scheduler, daemon=True)
+job_watchdog_thread = Thread(target=job_watchdog, daemon=True)
+unsafe_tts_cleanup_scheduler_thread = Thread(target=unsafe_tts_cleanup_scheduler, daemon=True)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     JOB_ROOT.mkdir(parents=True, exist_ok=True)
+    sync_state_files_to_db()
     app_data["jobs"].load()
+    requeue_persisted_queued_jobs()
     load_auth_store()
     load_settings()
     load_stats()
@@ -980,6 +1577,10 @@ async def lifespan(app: FastAPI):
         worker_thread.start()
     if not word_auto_scheduler_thread.is_alive():
         word_auto_scheduler_thread.start()
+    if not job_watchdog_thread.is_alive():
+        job_watchdog_thread.start()
+    if not unsafe_tts_cleanup_scheduler_thread.is_alive():
+        unsafe_tts_cleanup_scheduler_thread.start()
     yield
 
 
@@ -1001,42 +1602,28 @@ def hash_secret(value: str) -> str:
 
 def load_auth_store() -> dict:
     with auth_lock:
-        stored = db_get_json("auth_store", None)
-        if stored is not None:
-            stored.setdefault("magic_tokens", {})
-            stored.setdefault("sessions", {})
-            stored.setdefault("users", {})
-            stored.setdefault("anonymous_users", {})
-            return stored
-        if not AUTH_STORE.exists():
-            payload = {"magic_tokens": {}, "sessions": {}, "users": {}, "anonymous_users": {}}
-            db_set_json("auth_store", payload)
-            return payload
-        try:
-            payload = json.loads(AUTH_STORE.read_text(encoding="utf-8"))
-        except Exception:
-            payload = {"magic_tokens": {}, "sessions": {}, "users": {}, "anonymous_users": {}}
-            db_set_json("auth_store", payload)
-            return payload
+        payload = load_json_state(
+            AUTH_STORE,
+            {"magic_tokens": {}, "sessions": {}, "users": {}, "anonymous_users": {}},
+            key="auth_store",
+            create=True,
+        )
         payload.setdefault("magic_tokens", {})
         payload.setdefault("sessions", {})
         payload.setdefault("users", {})
         payload.setdefault("anonymous_users", {})
-        db_set_json("auth_store", payload)
         return payload
 
 
 def load_settings() -> AppSettings:
-    stored = db_get_json("settings", None)
-    if stored is not None:
-        try:
-            return AppSettings.model_validate(stored)
-        except Exception:
-            return AppSettings()
-    if not SETTINGS_PATH.exists():
-        settings = AppSettings()
-        db_set_json("settings", settings.model_dump())
-        return settings
+    default = AppSettings()
+    payload = load_json_state(SETTINGS_PATH, default.model_dump(), key="settings", create=True)
+    try:
+        settings = AppSettings.model_validate(payload)
+    except Exception:
+        settings = default
+    save_json_state(SETTINGS_PATH, settings.model_dump(), key="settings")
+    return settings
 
 
 RANDOM_SENTENCE_FALLBACKS = [
@@ -1049,6 +1636,7 @@ RANDOM_SENTENCE_FALLBACKS = [
 
 
 def clean_generated_sentence(text: str) -> str:
+    text = sanitize_text_for_tts(text)
     text = re.sub(r"```.*?```", "", text, flags=re.S)
     text = re.sub(r"^[「\"']|[」\"']$", "", text.strip())
     text = re.sub(r"\s+", " ", text).strip()
@@ -1116,27 +1704,15 @@ def generate_random_sentence(payload: RandomSentenceRequest) -> RandomSentenceRe
         print(f"LLM random sentence failed: {exc}", flush=True)
         text = fallback_random_sentence(payload)
         return RandomSentenceResponse(title=title_from_text(text), chinese_text=text, source="fallback", model=settings.llm_model)
-    try:
-        settings = AppSettings.model_validate_json(SETTINGS_PATH.read_text(encoding="utf-8"))
-        db_set_json("settings", settings.model_dump())
-        return settings
-    except Exception:
-        settings = AppSettings()
-        db_set_json("settings", settings.model_dump())
-        return settings
 
 
 def save_settings(settings: AppSettings):
-    db_set_json("settings", settings.model_dump())
-    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS_PATH.write_text(settings.model_dump_json(indent=2), encoding="utf-8")
+    save_json_state(SETTINGS_PATH, settings.model_dump(), key="settings")
 
 
 def save_auth_store(payload: dict):
     with auth_lock:
-        db_set_json("auth_store", payload)
-        AUTH_STORE.parent.mkdir(parents=True, exist_ok=True)
-        AUTH_STORE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        save_json_state(AUTH_STORE, payload, key="auth_store")
 
 
 def prune_auth_store(payload: dict):
@@ -1475,62 +2051,41 @@ def reviews_path_for_job(job: Job) -> Path:
     return output_dir / "reviews.json"
 
 
+def load_state_json_file(path: Path, default: dict) -> dict:
+    return load_json_state(path, default)
+
+
+def save_state_json_file(path: Path, payload: dict):
+    save_json_state(path, payload)
+
+
+def state_json_exists(path: Path) -> bool:
+    return path.exists() or db_has_json(json_state_key(path))
+
+
 def load_reviews(job: Job) -> list[dict]:
     reviews_path = reviews_path_for_job(job)
-    if not reviews_path.exists():
-        return []
-    try:
-        return json.loads(reviews_path.read_text(encoding="utf-8")).get("reviews", [])
-    except Exception:
-        return []
+    return load_json_state(reviews_path, {"reviews": []}).get("reviews", [])
 
 
 def save_reviews(job: Job, reviews: list[dict]):
     reviews_path = reviews_path_for_job(job)
-    reviews_path.parent.mkdir(parents=True, exist_ok=True)
-    reviews_path.write_text(json.dumps({"reviews": reviews}, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_json_state(reviews_path, {"reviews": reviews})
 
 
 def load_stats() -> dict:
     with stats_lock:
-        stored = db_get_json("stats", None)
-        if stored is not None:
-            stored.setdefault("jobs", {})
-            stored.setdefault("words", {})
-            stored.setdefault("actions", {})
-            stored.setdefault("daily", {})
-            stored.setdefault("total_plays", 0)
-            stored.setdefault("audio_plays", 0)
-            stored.setdefault("video_plays", 0)
-            return stored
-        if not STATS_PATH.exists():
-            payload = {
-                "total_plays": 0,
-                "audio_plays": 0,
-                "video_plays": 0,
-                "jobs": {},
-                "words": {},
-                "actions": {},
-                "daily": {},
-                "updated_at": 0,
-            }
-            db_set_json("stats", payload)
-            return payload
-        try:
-            payload = json.loads(STATS_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            payload = {
-                "total_plays": 0,
-                "audio_plays": 0,
-                "video_plays": 0,
-                "jobs": {},
-                "words": {},
-                "actions": {},
-                "daily": {},
-                "updated_at": 0,
-            }
-            db_set_json("stats", payload)
-            return payload
+        default = {
+            "total_plays": 0,
+            "audio_plays": 0,
+            "video_plays": 0,
+            "jobs": {},
+            "words": {},
+            "actions": {},
+            "daily": {},
+            "updated_at": 0,
+        }
+        payload = load_json_state(STATS_PATH, default, key="stats", create=True)
         payload.setdefault("jobs", {})
         payload.setdefault("words", {})
         payload.setdefault("actions", {})
@@ -1538,16 +2093,13 @@ def load_stats() -> dict:
         payload.setdefault("total_plays", 0)
         payload.setdefault("audio_plays", 0)
         payload.setdefault("video_plays", 0)
-        db_set_json("stats", payload)
         return payload
 
 
 def save_stats(payload: dict):
     with stats_lock:
-        STATS_PATH.parent.mkdir(parents=True, exist_ok=True)
         payload["updated_at"] = time.time()
-        db_set_json("stats", payload)
-        STATS_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        save_json_state(STATS_PATH, payload, key="stats")
 
 
 def stats_day_key(ts: Optional[float] = None) -> str:
@@ -1765,7 +2317,7 @@ def present_job(job: Job, admin: bool, user_id: str = ""):
             payload["metadata"] = {
                 key: value
                 for key, value in payload["metadata"].items()
-                if key not in {"requester_id"}
+                if key not in {"requester_id", "replacements"}
             }
     payload.update(job_rating_summary(job, user_id))
     payload.update(job_play_summary(job.id))
@@ -1781,6 +2333,15 @@ def require_job_access(
     if job_is_public(job) or is_authorized(request, taigi_web_token_cookie, authorization) or job_is_owned_by_request(job, request):
         return
     raise HTTPException(status_code=401, detail="Private access required")
+
+
+def source_job_for_segment_regeneration(job: Job) -> Job:
+    if job.kind != "segment_regeneration":
+        return job
+    source_job_id = str(job.metadata.get("source_job_id") or "")
+    if not source_job_id:
+        raise HTTPException(status_code=400, detail={"message": "這筆重生工作缺少原始工作資訊。"})
+    return app_data["jobs"].get(source_job_id)
 
 
 def content_disposition(filename: str) -> str:
@@ -1866,6 +2427,11 @@ def public_media_for_word(word: dict) -> dict:
 def public_word_entry(word: dict, stats_words: dict, user_id: str = "") -> dict:
     ratings = word_rating_summary(word, user_id)
     generation = word_generation_status(word)
+    word_db = load_word_db()
+    token_statuses = word_token_review_statuses(word, user_id)
+    source_tokens = segment_token_entries(str(word.get("source") or ""), word_db)
+    for token in source_tokens:
+        token["review_status"] = token_statuses.get(str(token.get("source") or ""), "")
     return {
         "id": word.get("id"),
         "source": word.get("source"),
@@ -1887,12 +2453,68 @@ def public_word_entry(word: dict, stats_words: dict, user_id: str = "") -> dict:
         "has_audio": bool(word.get("has_audio")),
         "has_video": bool(word.get("has_video")),
         "assets": public_word_assets(word, user_id),
+        "source_tokens": source_tokens,
         "multilingual": word.get("multilingual", {}),
         "multilingual_request_count": len(word.get("multilingual_requests") or []),
         **generation,
         "updated_at": word.get("updated_at"),
         "generated_at": word.get("generated_at"),
     }
+
+
+def segment_token_entries(source_text: str, word_db: dict) -> list[dict]:
+    words = word_db.get("words", {})
+    entries = []
+    for source_word in tokenize_chinese(source_text):
+        taigi_text = translate_chinese_to_taigi(source_word)
+        tailo_text = tailo_for(taigi_text) if taigi_text else ""
+        word_id = safe_word_id(source_word, taigi_text) if taigi_text else ""
+        word = words.get(word_id, {})
+        entries.append({
+            "source": source_word,
+            "taigi": word.get("taigi") or taigi_text,
+            "tailo": word.get("tailo") or tailo_text,
+            "word_id": word_id if word_id in words else "",
+            "exists": word_id in words,
+            "problem": bool(word.get("problem")),
+            "has_audio": bool(word.get("has_audio")),
+            "has_video": bool(word.get("has_video")),
+            "generation_status": word_generation_status(word).get("generation_status") if word else "",
+        })
+    return entries
+
+
+def token_review_statuses(reviews: list[dict], segment_index: int, user_id: str) -> dict[str, str]:
+    statuses: dict[str, str] = {}
+    for review in sorted(reviews, key=lambda item: item.get("updated_at") or item.get("created_at") or 0):
+        if int(review.get("segment_index") or 0) != segment_index:
+            continue
+        if user_id and review.get("user_id") != user_id:
+            continue
+        for correction in review.get("corrections") or []:
+            source = str(correction.get("source_phrase") or "").strip()
+            status = str(correction.get("status") or "").strip()
+            if source and status in {"problem", "ok"}:
+                statuses[source] = status
+    return statuses
+
+
+def word_token_review_statuses(word: dict, user_id: str) -> dict[str, str]:
+    statuses: dict[str, str] = {}
+    token_reviews = word.get("token_reviews") or {}
+    review_sets = []
+    if user_id and isinstance(token_reviews.get(user_id), dict):
+        review_sets.append(token_reviews.get(user_id) or {})
+    if isinstance(token_reviews.get("shared"), dict):
+        review_sets.append(token_reviews.get("shared") or {})
+    if not review_sets and isinstance(token_reviews, dict):
+        review_sets = [token_reviews]
+    for review_set in review_sets:
+        for source, item in review_set.items():
+            status = item.get("status") if isinstance(item, dict) else item
+            if status in {"problem", "ok"}:
+                statuses[str(source)] = str(status)
+    return statuses
 
 
 def public_jobs_snapshot() -> dict:
@@ -2016,7 +2638,25 @@ def public_stats() -> dict:
     word_assets_problem = sum(1 for word in words if word.get("problem"))
     word_asset_jobs = [job for job in jobs if job.kind == "word_asset"]
     actions = stats.get("actions", {})
+    today_actions = stats.get("daily", {}).get(stats_day_key(), {}).get("actions", {})
     source_exports = source_export_summary()
+
+    def empty_rating_buckets() -> dict[str, int]:
+        return {str(score): 0 for score in range(1, 6)}
+
+    def add_average_rating_bucket(buckets: dict[str, int], average: float | int | None):
+        if average is None:
+            return
+        score = max(1, min(5, int(float(average) + 0.5)))
+        buckets[str(score)] += 1
+
+    word_entry_rating_buckets = empty_rating_buckets()
+    for word in words:
+        add_average_rating_bucket(word_entry_rating_buckets, word_rating_summary(word).get("rating_average"))
+    word_asset_rating_buckets = empty_rating_buckets()
+    for asset in word_assets:
+        add_average_rating_bucket(word_asset_rating_buckets, asset.get("rating_average"))
+
     lexicon_quality = {
         "word_entries_total": len(words),
         "word_entries_rated": word_entries_rated,
@@ -2024,6 +2664,8 @@ def public_stats() -> dict:
         "word_assets_total": word_assets_total,
         "word_assets_rated": word_assets_rated,
         "word_assets_unrated": max(0, word_assets_total - word_assets_rated),
+        "word_entry_rating_buckets": word_entry_rating_buckets,
+        "word_asset_rating_buckets": word_asset_rating_buckets,
         "word_problem_count": word_assets_problem,
         "word_problem_rate": round(word_assets_problem / len(words), 4) if words else 0,
         "word_regeneration_requests": int(actions.get("create_word_asset_job") or 0),
@@ -2050,6 +2692,8 @@ def public_stats() -> dict:
         "jobs_failed": sum(1 for job in jobs if job.status == "failed"),
         "words_total": len(words),
         "word_queries_total": lexicon_quality["word_queries_total"],
+        "page_visits_total": int(actions.get("page_visit") or 0),
+        "page_visits_today": int(today_actions.get("page_visit") or 0),
         "source_exports": source_exports,
         "lexicon_quality": lexicon_quality,
         "actions": actions,
@@ -2073,33 +2717,21 @@ def title_from_text(text: str, limit: int = 48) -> str:
 
 def load_translation_memory() -> dict:
     with memory_lock:
-        stored = db_get_json("translation_memory", None)
-        if stored is not None:
-            stored.setdefault("terms", {})
-            stored.setdefault("feedback", [])
-            return stored
-        if not TRANSLATION_MEMORY.exists():
-            payload = {"terms": {}, "feedback": []}
-            db_set_json("translation_memory", payload)
-            return payload
-        try:
-            payload = json.loads(TRANSLATION_MEMORY.read_text(encoding="utf-8"))
-        except Exception:
-            payload = {"terms": {}, "feedback": []}
-            db_set_json("translation_memory", payload)
-            return payload
+        payload = load_json_state(
+            TRANSLATION_MEMORY,
+            {"terms": {}, "feedback": []},
+            key="translation_memory",
+            create=True,
+        )
         payload.setdefault("terms", {})
         payload.setdefault("feedback", [])
-        db_set_json("translation_memory", payload)
         return payload
 
 
 def save_translation_memory(payload: dict):
     with memory_lock:
-        TRANSLATION_MEMORY.parent.mkdir(parents=True, exist_ok=True)
         payload["updated_at"] = time.time()
-        db_set_json("translation_memory", payload)
-        TRANSLATION_MEMORY.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        save_json_state(TRANSLATION_MEMORY, payload, key="translation_memory")
 
 
 def remember_feedback(job_id: str, segment_index: int, feedback: SegmentFeedback):
@@ -2109,6 +2741,8 @@ def remember_feedback(job_id: str, segment_index: int, feedback: SegmentFeedback
     terms = memory.setdefault("terms", {})
     now = time.time()
     for correction in feedback.corrections:
+        if correction.status == "ok":
+            continue
         source = correction.source_phrase.strip()
         if not source:
             continue
@@ -2207,7 +2841,8 @@ PHRASE_MAP = [
 ]
 
 
-def translate_chinese_to_taigi(text: str) -> str:
+def translate_chinese_to_taigi_rule(text: str) -> str:
+    text = sanitize_text_for_tts(text)
     cleaned = re.sub(r"\s+", " ", text.strip())
     cleaned = apply_translation_memory(cleaned)
     for source, target in PHRASE_MAP:
@@ -2230,21 +2865,79 @@ def translate_chinese_to_taigi(text: str) -> str:
     return cleaned
 
 
+def clean_taigi_llm_translation(text: str) -> str:
+    text = sanitize_text_for_tts(text)
+    text = text.strip()
+    text = text.split("[/")[0].strip()
+    text = re.sub(r"^[:：\s]+", "", text)
+    text = re.sub(r"^(HAN|HL|POJ|台語|閩南語|翻譯)[:：]\s*", "", text, flags=re.I)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text.strip("` \n\r\t")
+
+
+def translate_chinese_to_taigi_with_tw_llm(text: str, settings: AppSettings) -> str:
+    base = settings.translator_api_base_url.strip().rstrip("/")
+    model = settings.translator_model.strip()
+    if not base or not model:
+        raise ValueError("TW-Hokkien-LLM translator backend requires translator API base URL and model.")
+    target_language = settings.translator_target_language or "HAN"
+    prompt = f"[TRANS]\n{text.strip()}\n[/TRANS]\n[{target_language}]\n"
+    body = {
+        "model": model,
+        "prompt": prompt,
+        "temperature": 0,
+        "max_tokens": 512,
+        "stream": False,
+    }
+    headers = {"Content-Type": "application/json"}
+    if settings.translator_api_key.strip():
+        headers["Authorization"] = f"Bearer {settings.translator_api_key.strip()}"
+    req = urllib.request.Request(
+        f"{base}/completions",
+        data=json.dumps(body).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    timeout = max(5, min(int(settings.translator_timeout_seconds or 90), 600))
+    with urllib.request.urlopen(req, timeout=timeout) as res:
+        raw = json.loads(res.read().decode("utf-8"))
+    choice = raw.get("choices", [{}])[0]
+    generated = choice.get("text") or choice.get("message", {}).get("content", "")
+    translated = clean_taigi_llm_translation(str(generated))
+    if not translated:
+        raise ValueError("TW-Hokkien-LLM translator returned empty text.")
+    return translated
+
+
+def translate_chinese_to_taigi(text: str, *, use_model: bool = False, settings: Optional[AppSettings] = None) -> str:
+    if use_model:
+        active_settings = settings or load_settings()
+        if active_settings.translator_backend == "tw_hokkien_llm":
+            try:
+                return translate_chinese_to_taigi_with_tw_llm(text, active_settings)
+            except Exception as exc:
+                print(f"TW-Hokkien-LLM translation failed, falling back to rule translator: {exc}", flush=True)
+    return translate_chinese_to_taigi_rule(text)
+
+
 def build_segment_records(chinese_text: str, taigi_override: str, max_chars: int) -> list[dict]:
+    chinese_text = sanitize_text_for_tts(chinese_text)
+    taigi_override = sanitize_text_for_tts(taigi_override)
     source_segments = split_segments(chinese_text, max_chars)
+    settings = load_settings()
     if taigi_override.strip():
         taigi_segments = split_segments(taigi_override.strip(), max_chars)
         if len(taigi_segments) < len(source_segments):
             taigi_segments.extend([""] * (len(source_segments) - len(taigi_segments)))
     else:
-        taigi_segments = [translate_chinese_to_taigi(segment) for segment in source_segments]
+        taigi_segments = [translate_chinese_to_taigi(segment, use_model=True, settings=settings) for segment in source_segments]
     total = max(len(source_segments), len(taigi_segments))
     records = []
     for idx in range(total):
         source = source_segments[idx] if idx < len(source_segments) else ""
         taigi = taigi_segments[idx] if idx < len(taigi_segments) else ""
         if not taigi and source:
-            taigi = translate_chinese_to_taigi(source)
+            taigi = translate_chinese_to_taigi(source, use_model=True, settings=settings)
         records.append({
             "index": idx + 1,
             "source_text": source,
@@ -2293,8 +2986,42 @@ def duration(path: Path) -> float:
     return float(output.strip())
 
 
-def run(cmd: list[str], cwd: Path = ROOT):
-    subprocess.run(cmd, cwd=cwd, check=True)
+def run(
+    cmd: list[str],
+    cwd: Path = ROOT,
+    timeout: int = SUBPROCESS_TIMEOUT_SECONDS,
+    heartbeat: Optional[Callable[[], None]] = None,
+):
+    command = " ".join(str(part) for part in cmd[:3])
+    if heartbeat is not None:
+        started_at = time.monotonic()
+        next_heartbeat = started_at + max(5, COMMAND_HEARTBEAT_SECONDS)
+        process = subprocess.Popen(cmd, cwd=cwd)
+        try:
+            while True:
+                returncode = process.poll()
+                if returncode is not None:
+                    if returncode != 0:
+                        raise subprocess.CalledProcessError(returncode, cmd)
+                    return
+                now = time.monotonic()
+                if now - started_at > timeout:
+                    process.kill()
+                    process.wait()
+                    raise TimeoutError(f"External command timed out after {timeout}s: {command}")
+                if now >= next_heartbeat:
+                    heartbeat()
+                    next_heartbeat = now + max(5, COMMAND_HEARTBEAT_SECONDS)
+                time.sleep(1)
+        except Exception:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            raise
+    try:
+        subprocess.run(cmd, cwd=cwd, check=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(f"External command timed out after {timeout}s: {command}") from exc
 
 
 def safe_word_id(source: str, taigi: str) -> str:
@@ -2339,34 +3066,22 @@ def seed_fixed_phrases(payload: dict) -> dict:
 
 def load_word_db() -> dict:
     with word_db_lock:
-        stored = db_get_json("word_db", None)
-        if stored is not None:
-            stored.setdefault("words", {})
-            stored.setdefault("queries", {})
-            return seed_fixed_phrases(stored)
-        if not WORD_DB.exists():
-            payload = seed_fixed_phrases({"words": {}, "queries": {}, "updated_at": 0})
-            db_set_json("word_db", payload)
-            return payload
-        try:
-            payload = json.loads(WORD_DB.read_text(encoding="utf-8"))
-        except Exception:
-            payload = seed_fixed_phrases({"words": {}, "queries": {}, "updated_at": 0})
-            db_set_json("word_db", payload)
-            return payload
+        payload = load_json_state(
+            WORD_DB,
+            {"words": {}, "queries": {}, "updated_at": 0},
+            key="word_db",
+            create=True,
+        )
         payload.setdefault("words", {})
         payload.setdefault("queries", {})
         payload = seed_fixed_phrases(payload)
-        db_set_json("word_db", payload)
         return payload
 
 
 def save_word_db(payload: dict):
     with word_db_lock:
-        WORD_DB.parent.mkdir(parents=True, exist_ok=True)
         payload["updated_at"] = time.time()
-        db_set_json("word_db", payload)
-        WORD_DB.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        save_json_state(WORD_DB, payload, key="word_db")
     schedule_public_snapshot_export()
 
 
@@ -2571,13 +3286,70 @@ def tokenize_chinese(text: str) -> list[str]:
     return words
 
 
-def generate_word_video(word_dir: Path, title: str, audio_path: Path) -> Path:
-    return make_video(
-        word_dir,
-        title,
-        audio_path,
-        [{"index": 1, "start": 0.0, "end": max(0.2, duration(audio_path)), "text": title}],
-    )
+def make_word_background(path: Path, title: str, tailo_text: str = ""):
+    width, height = 1920, 1080
+    image = Image.new("RGB", (width, height), (8, 11, 18))
+    draw = ImageDraw.Draw(image)
+    for y in range(height):
+        color = (8 + int(y / height * 18), 11 + int(y / height * 26), 18 + int(y / height * 34))
+        draw.line([(0, y), (width, y)], fill=color)
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    od.rectangle([0, 0, width, 132], fill=(0, 0, 0, 96))
+    od.rectangle([0, 710, width, height], fill=(0, 0, 0, 76))
+    font_path = font_path_for_cjk()
+    title_font = ImageFont.truetype(font_path, 66)
+    word_font = ImageFont.truetype(font_path, 150)
+    tailo_font = ImageFont.truetype(font_path, 54)
+    small = ImageFont.truetype(font_path, 30)
+    od.text((72, 42), "語詞聲音", font=title_font, fill=(245, 248, 255, 255))
+    od.text((72, 106), "VoxCPM 台語單詞語音 · 詞庫素材", font=small, fill=(178, 210, 220, 255))
+    word_lines = wrap_text(title, word_font, 1500)
+    if len(word_lines) > 2:
+        word_font = ImageFont.truetype(font_path, 112)
+        word_lines = wrap_text(title, word_font, 1540)
+    word_lines = word_lines[:3]
+    line_height = word_font.size + 28
+    tailo_lines = wrap_text(tailo_text, tailo_font, 1500)[:2] if tailo_text else []
+    total_height = len(word_lines) * line_height + (len(tailo_lines) * (tailo_font.size + 18) if tailo_lines else 0)
+    y = 480 - total_height // 2
+    for line in word_lines:
+        tw = od.textlength(line, font=word_font)
+        od.text(((width - tw) / 2, y), line, font=word_font, fill=(255, 255, 255, 255), stroke_width=5, stroke_fill=(0, 0, 0, 190))
+        y += line_height
+    if tailo_lines:
+        y += 10
+        for line in tailo_lines:
+            tw = od.textlength(line, font=tailo_font)
+            od.text(((width - tw) / 2, y), line, font=tailo_font, fill=(184, 238, 244, 255), stroke_width=2, stroke_fill=(0, 0, 0, 150))
+            y += tailo_font.size + 18
+    Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB").save(path)
+
+
+def generate_word_video(word_dir: Path, title: str, audio_path: Path, tailo_text: str = "") -> Path:
+    bg_path = word_dir / "word_background.png"
+    make_word_background(bg_path, title, tailo_text)
+    video_path = word_dir / "word_video.mp4"
+    cmd = [
+        FFMPEG, "-y",
+        "-loop", "1", "-i", str(bg_path),
+        "-i", str(audio_path),
+        "-filter_complex",
+        "[1:a]showspectrum=s=1920x300:slide=scroll:mode=combined:color=rainbow:scale=sqrt:fps=30,format=rgba,colorchannelmixer=aa=0.50[spec];"
+        "[1:a]showwaves=s=1920x410:mode=cline:rate=30:colors=00f5ff,format=rgba,split=2[w1][w2];"
+        "[w2]gblur=sigma=18,colorchannelmixer=aa=0.46[glow];"
+        "[0:v]scale=1920:1080,fps=30,format=rgba[bg];"
+        "[bg][spec]overlay=0:710[tmp1];"
+        "[tmp1][glow]overlay=0:328[tmp2];"
+        "[tmp2][w1]overlay=0:328,format=yuv420p[v]",
+        "-map", "[v]", "-map", "1:a",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+        "-c:a", "aac", "-b:a", "192k",
+        "-shortest", "-movflags", "+faststart",
+        str(video_path),
+    ]
+    run(cmd, timeout=VIDEO_RENDER_TIMEOUT_SECONDS)
+    return video_path
 
 
 def generate_word_assets(word: dict, voice_mode: str, voice_control: str, device: str, timesteps: int, cfg_value: float, force: bool = False) -> dict:
@@ -2613,7 +3385,7 @@ def generate_word_assets(word: dict, voice_mode: str, voice_control: str, device
     if reference_audio and reference_audio.exists():
         cmd.extend(["--reference-audio", str(reference_audio)])
     run(cmd)
-    generated_video = generate_word_video(word_dir, word["taigi"], audio_path)
+    generated_video = generate_word_video(word_dir, word["taigi"], audio_path, word.get("tailo", ""))
     if generated_video != video_path:
         shutil.move(generated_video, video_path)
     return {
@@ -2707,7 +3479,7 @@ def generate_word_asset_variant(word: dict, voice_mode: str, voice_control: str,
     if reference_audio and reference_audio.exists():
         cmd.extend(["--reference-audio", str(reference_audio)])
     run(cmd)
-    generated_video = generate_word_video(word_dir, word["taigi"], audio_path)
+    generated_video = generate_word_video(word_dir, word["taigi"], audio_path, word.get("tailo", ""))
     if generated_video != video_path:
         shutil.move(generated_video, video_path)
     asset = {
@@ -2778,7 +3550,7 @@ def update_word_database_for_job(job_id: str, segment_records: list[dict], paylo
                 job_id=job_id,
                 category="詞語",
                 source_type="generated_word",
-                generate_assets_flag=True,
+                generate_assets_flag=False,
                 payload=payload,
                 voice_mode=voice_mode,
                 voice_control=voice_control,
@@ -2863,7 +3635,13 @@ def make_subtitle_png(path: Path, text: str, index: int, total: int):
     image.save(path)
 
 
-def make_video(job_dir: Path, title: str, audio_path: Path, segments: list[dict]) -> Path:
+def make_video(
+    job_dir: Path,
+    title: str,
+    audio_path: Path,
+    segments: list[dict],
+    heartbeat: Optional[Callable[[], None]] = None,
+) -> Path:
     bg_path = job_dir / "background.png"
     make_background(bg_path, title)
     subtitle_paths = []
@@ -2904,7 +3682,7 @@ def make_video(job_dir: Path, title: str, audio_path: Path, segments: list[dict]
         "-shortest", "-movflags", "+faststart",
         str(video_path),
     ]
-    run(cmd)
+    run(cmd, timeout=VIDEO_RENDER_TIMEOUT_SECONDS, heartbeat=heartbeat)
     return video_path
 
 
@@ -2944,6 +3722,7 @@ def synthesize_segment_audio(
     timesteps: int,
     cfg_value: float,
 ):
+    text = sanitize_text_for_tts(text)
     reference_audio: Optional[Path] = None
     if voice_mode == "default":
         reference_audio = DEFAULT_REFERENCE_AUDIO.expanduser()
@@ -2968,7 +3747,55 @@ def synthesize_segment_audio(
     tmp_path.replace(wav_path)
 
 
-def rebuild_job_outputs(job: Job, segments_payload: dict, *, render_video: bool = True) -> tuple[Path, Optional[Path], Path]:
+def segment_replacement_from_texts(
+    segment: dict,
+    corrected_taigi: str = "",
+    corrected_tailo: str = "",
+) -> dict[str, str]:
+    corrected_taigi = corrected_taigi.strip()
+    corrected_tailo = corrected_tailo.strip()
+    current_taigi = str(segment.get("taigi_text") or "").strip()
+    current_tailo = str(segment.get("tailo_text") or "").strip()
+    requested_taigi = corrected_taigi or str(segment.get("corrected_taigi_text") or "").strip()
+    requested_tailo = corrected_tailo or str(segment.get("corrected_tailo_text") or "").strip()
+    taigi_text = requested_taigi or current_taigi
+    tailo_text = requested_tailo or current_tailo
+    taigi_changed = bool(requested_taigi and requested_taigi != current_taigi)
+    tailo_changed = bool(requested_tailo and requested_tailo != current_tailo)
+    if taigi_changed and not tailo_changed:
+        tailo_text = tailo_for(requested_taigi)
+    if not tailo_text and taigi_text:
+        tailo_text = tailo_for(taigi_text)
+    if taigi_changed:
+        synthesis_text = requested_taigi
+        synthesis_source = "corrected_taigi"
+    elif tailo_changed:
+        synthesis_text = requested_tailo
+        synthesis_source = "corrected_tailo"
+    elif requested_taigi:
+        synthesis_text = requested_taigi
+        synthesis_source = "corrected_taigi"
+    elif requested_tailo:
+        synthesis_text = requested_tailo
+        synthesis_source = "corrected_tailo"
+    else:
+        synthesis_text = taigi_text or tailo_text
+        synthesis_source = "taigi" if taigi_text else "tailo"
+    return {
+        "taigi_text": taigi_text,
+        "tailo_text": tailo_text,
+        "synthesis_text": synthesis_text,
+        "synthesis_source": synthesis_source,
+    }
+
+
+def rebuild_job_outputs(
+    job: Job,
+    segments_payload: dict,
+    *,
+    render_video: bool = True,
+    progress_callback: Optional[Callable[[str, int], None]] = None,
+) -> tuple[Path, Optional[Path], Path]:
     output_dir = Path(job.output_dir or JOB_ROOT / job.id / "output")
     segments_dir = output_dir / "segments"
     segments = sorted(segments_payload.get("segments", []), key=lambda item: int(item.get("index") or 0))
@@ -2987,8 +3814,12 @@ def rebuild_job_outputs(job: Job, segments_payload: dict, *, render_video: bool 
     concat_path = segments_dir / "concat.txt"
     concat_path.write_text("".join(f"file '{path.name}'\n" for path in wav_paths), encoding="utf-8")
     audio_path = output_dir / "taigi_voice.wav"
+    if progress_callback:
+        progress_callback("Joining regenerated audio", 76)
     run([FFMPEG, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_path.name), "-c", "copy", str(audio_path)], cwd=segments_dir)
 
+    if progress_callback:
+        progress_callback("Preparing regenerated subtitles", 82)
     timeline = []
     cursor = 0.0
     for segment, wav_path in zip(segments, wav_paths):
@@ -3010,42 +3841,71 @@ def rebuild_job_outputs(job: Job, segments_payload: dict, *, render_video: bool 
 
     (output_dir / "taigi_draft.txt").write_text("\n".join(str(segment.get("taigi_text") or "") for segment in segments), encoding="utf-8")
     (output_dir / "tailo.txt").write_text("\n".join(str(segment.get("tailo_text") or "") for segment in segments), encoding="utf-8")
-    (output_dir / "subtitles.json").write_text(json.dumps({"duration": cursor, "segments": timeline}, ensure_ascii=False, indent=2), encoding="utf-8")
-    (output_dir / "segments.json").write_text(json.dumps({"segments": segments}, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_state_json_file(output_dir / "subtitles.json", {"duration": cursor, "segments": timeline})
+    save_state_json_file(output_dir / "segments.json", {"segments": segments})
 
-    video_path = make_video(output_dir, job.title, audio_path, timeline) if render_video and job.video_path else None
+    if progress_callback:
+        progress_callback("Rendering regenerated waveform video", 88)
+    video_path = make_video(
+        output_dir,
+        job.title,
+        audio_path,
+        timeline,
+        heartbeat=lambda: progress_callback("Rendering regenerated waveform video", 88) if progress_callback else None,
+    ) if render_video and job.video_path else None
+    if progress_callback:
+        progress_callback("Packaging regenerated outputs", 96)
     zip_path = make_archive(output_dir)
     return audio_path, video_path, zip_path
 
 
-def regenerate_job_segments_from_texts(job: Job, segments_payload: dict, replacements: dict[int, tuple[str, str]]) -> tuple[list[dict], Path, Optional[Path], Path]:
+def regenerate_job_segments_from_texts(
+    job: Job,
+    segments_payload: dict,
+    replacements: dict[int, dict[str, str]],
+    progress_callback: Optional[Callable[[str, int], None]] = None,
+) -> tuple[list[dict], Path, Optional[Path], Path]:
     output_dir = Path(job.output_dir or JOB_ROOT / job.id / "output")
     segments_dir = output_dir / "segments"
     voice_mode = (output_dir / "voice_mode.txt").read_text(encoding="utf-8").strip() if (output_dir / "voice_mode.txt").exists() else load_settings().default_reference_voice_mode
     voice_control = (output_dir / "voice_control.txt").read_text(encoding="utf-8").strip() if (output_dir / "voice_control.txt").exists() else resolve_voice_control("default_male")
     regenerated = []
+    total = len(replacements)
+    current = 0
     for segment in segments_payload.get("segments", []):
         idx = int(segment.get("index") or 0)
         if idx not in replacements:
             continue
-        new_taigi, new_tailo = replacements[idx]
-        new_taigi = new_taigi.strip()
-        if not new_taigi:
+        replacement = replacements[idx]
+        new_taigi = str(replacement.get("taigi_text") or segment.get("taigi_text") or "").strip()
+        new_tailo = str(replacement.get("tailo_text") or "").strip() or tailo_for(new_taigi)
+        synthesis_text = str(replacement.get("synthesis_text") or new_taigi or new_tailo).strip()
+        if not synthesis_text:
             continue
-        new_tailo = new_tailo.strip() or tailo_for(new_taigi)
         wav_path = segments_dir / f"seg_{idx:02d}.wav"
-        synthesize_segment_audio(wav_path, new_taigi, voice_mode, voice_control, DEFAULT_DEVICE, 10, 2.5)
+        current += 1
+        if progress_callback:
+            progress = 12 + int((current - 1) / max(total, 1) * 58)
+            progress_callback(f"Regenerating audio segment {idx} ({current}/{total})", progress)
+        synthesize_segment_audio(wav_path, synthesis_text, voice_mode, voice_control, DEFAULT_DEVICE, 10, 2.5)
         segment["taigi_text"] = new_taigi
         segment["tailo_text"] = new_tailo
         segment["corrected_taigi_text"] = new_taigi
         segment["corrected_tailo_text"] = new_tailo
+        segment["last_synthesis_text"] = synthesis_text
+        segment["last_synthesis_source"] = str(replacement.get("synthesis_source") or "taigi")
         segment["regenerated_at"] = time.time()
         segment["audio_file"] = f"segments/{wav_path.name}"
         write_segment_text_files(segments_dir, segment)
         regenerated.append(segment)
     if not regenerated:
         raise ValueError("No segment text available for regeneration.")
-    audio_path, video_path, zip_path = rebuild_job_outputs(job, segments_payload, render_video=True)
+    audio_path, video_path, zip_path = rebuild_job_outputs(
+        job,
+        segments_payload,
+        render_video=True,
+        progress_callback=progress_callback,
+    )
     return regenerated, audio_path, video_path, zip_path
 
 
@@ -3129,8 +3989,8 @@ def run_job(job_id: str, payload: CreateJobRequest):
                 "audio_file": record["audio_file"],
             })
             cursor += dur
-        (output_dir / "subtitles.json").write_text(json.dumps({"duration": cursor, "segments": timeline}, ensure_ascii=False, indent=2), encoding="utf-8")
-        (output_dir / "segments.json").write_text(json.dumps({"segments": segment_records}, ensure_ascii=False, indent=2), encoding="utf-8")
+        save_state_json_file(output_dir / "subtitles.json", {"duration": cursor, "segments": timeline})
+        save_state_json_file(output_dir / "segments.json", {"segments": segment_records})
 
         jobs.update(job_id, stage="Updating word database", progress=82)
         update_word_database_for_job(job_id, segment_records, payload, voice_mode, voice_control)
@@ -3138,7 +3998,13 @@ def run_job(job_id: str, payload: CreateJobRequest):
         video_path = None
         if payload.make_video:
             jobs.update(job_id, stage="Rendering waveform video", progress=84)
-            video_path = make_video(output_dir, payload.title, audio_path, timeline)
+            video_path = make_video(
+                output_dir,
+                payload.title,
+                audio_path,
+                timeline,
+                heartbeat=lambda: jobs.update(job_id, stage="Rendering waveform video", progress=84),
+            )
 
         jobs.update(job_id, stage="Packaging outputs", progress=94)
         zip_path = make_archive(output_dir)
@@ -3183,17 +4049,110 @@ def run_job(job_id: str, payload: CreateJobRequest):
         )
 
 
-def dist_index() -> Optional[FileResponse]:
+def site_base_url(request: Request) -> str:
+    return str(request.base_url).rstrip("/")
+
+
+def dist_index_html(request: Request) -> Optional[HTMLResponse]:
     index = FRONTEND_DIST / "index.html"
-    return FileResponse(index) if index.exists() else None
+    if not index.exists():
+        return None
+    html = index.read_text(encoding="utf-8")
+    html = html.replace("__SITE_URL__", site_base_url(request))
+    return HTMLResponse(html)
+
+
+def rss_date(ts: float | int | None) -> str:
+    return formatdate(float(ts or time.time()), usegmt=True)
+
+
+def feed_item(title: str, link: str, description: str, guid: str, updated_at: float | int | None) -> str:
+    return "\n".join([
+        "    <item>",
+        f"      <title>{xml_escape(title)}</title>",
+        f"      <link>{xml_escape(link)}</link>",
+        f"      <guid isPermaLink=\"false\">{xml_escape(guid)}</guid>",
+        f"      <pubDate>{rss_date(updated_at)}</pubDate>",
+        f"      <description>{xml_escape(description)}</description>",
+        "    </item>",
+    ])
+
+
+def rss_feed_xml(request: Request) -> str:
+    base_url = site_base_url(request)
+    items: list[tuple[float, str]] = []
+    for job in app_data["jobs"].list():
+        if job.status != "complete" or job.kind not in {"script", "segment_regeneration"}:
+            continue
+        title = job.title or title_from_text(job.chinese_text) or "新的台語語音影片"
+        description = first_sentence(job.chinese_text) or "新的台語語音與字幕波形影片已完成。"
+        link = f"{base_url}/?tab=jobs"
+        updated = job.completed_at or job.updated_at or job.created_at
+        items.append((float(updated or 0), feed_item(
+            f"文章：{title}",
+            link,
+            description,
+            f"job:{job.id}",
+            updated,
+        )))
+    word_db = load_word_db()
+    for word in word_db.get("words", {}).values():
+        source = str(word.get("source") or "").strip()
+        if not source:
+            continue
+        taigi_text = str(word.get("taigi") or "").strip()
+        tailo_text = str(word.get("tailo") or "").strip()
+        description = " / ".join(part for part in [taigi_text, tailo_text, str(word.get("note") or "").strip()] if part)
+        updated = word.get("updated_at") or word.get("generated_at") or word.get("created_at")
+        items.append((float(updated or 0), feed_item(
+            f"詞彙：{source}",
+            f"{base_url}/?tab=lexicon",
+            description or "語詞與固定語句資料庫有新的詞條更新。",
+            f"word:{word.get('id') or source}",
+            updated,
+        )))
+    body = "\n".join(item for _, item in sorted(items, key=lambda pair: pair[0], reverse=True)[:30])
+    updated_at = max([timestamp for timestamp, _ in items], default=time.time())
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Taigi Voice Video Web</title>
+    <link>{xml_escape(base_url)}/</link>
+    <description>台語語音影片、分段校稿、語詞與固定語句資料庫更新。</description>
+    <language>zh-TW</language>
+    <lastBuildDate>{rss_date(updated_at)}</lastBuildDate>
+{body}
+  </channel>
+</rss>
+"""
 
 
 @app.get("/", response_class=HTMLResponse)
-async def root():
-    dist = dist_index()
+async def root(request: Request):
+    dist = dist_index_html(request)
     if dist:
         return dist
     return HTMLResponse("<h1>Taigi Voice Video Web</h1><p>Build the frontend with npm run build.</p>")
+
+
+@app.get("/og-image.png")
+async def og_image():
+    path = FRONTEND_DIST / "og-image.png"
+    if not path.exists():
+        path = FRONTEND_DIST / "assets" / "og-image.png"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(path, media_type="image/png")
+
+
+@app.get("/feed.xml")
+async def rss_feed(request: Request):
+    return FastAPIResponse(rss_feed_xml(request), media_type="application/rss+xml; charset=utf-8")
+
+
+@app.get("/rss.xml")
+async def rss_feed_alias(request: Request):
+    return FastAPIResponse(rss_feed_xml(request), media_type="application/rss+xml; charset=utf-8")
 
 
 @app.post("/auth")
@@ -3290,6 +4249,12 @@ async def api_info():
         "public_rate_limit_seconds": settings.public_rate_limit_seconds,
         "public_access": PUBLIC_ACCESS,
         "llm_random_sentence_enabled": bool(settings.llm_api_base_url and settings.llm_api_key and settings.llm_model),
+        "translator_backend": settings.translator_backend,
+        "tw_hokkien_llm_translator_enabled": bool(
+            settings.translator_backend == "tw_hokkien_llm"
+            and settings.translator_api_base_url
+            and settings.translator_model
+        ),
         "reference_voice_modes": [
             {"value": "default", "label": "預設聲音"},
             {"value": "random", "label": "隨機生成"},
@@ -3390,6 +4355,17 @@ async def record_action_endpoint(payload: StatActionRequest):
     return {"saved": True}
 
 
+@app.post("/maintenance/unsafe-tts-cleanup")
+async def enqueue_unsafe_tts_cleanup_endpoint(
+    request: Request,
+    taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
+):
+    require_auth(request, taigi_web_token_cookie, authorization)
+    job = enqueue_unsafe_tts_cleanup_job("manual")
+    return present_job(job, True, review_user_id(request))
+
+
 @app.post("/llm/random-sentence")
 async def random_sentence_endpoint(payload: RandomSentenceRequest):
     result = generate_random_sentence(payload)
@@ -3405,10 +4381,10 @@ async def request_source_export(payload: SourceExportRequest, request: Request):
 
 @app.post("/words/requests")
 async def request_new_word(payload: WordCreateRequest, request: Request, response: Response):
-    email = require_email_login(request)
-    user_id = f"admin:{email}" if email == ADMIN_EMAIL else f"user:{email}"
+    email = authenticated_email(request)
+    user_id = f"admin:{email}" if email == ADMIN_EMAIL else f"user:{email}" if email else review_user_id(request, response)
     word = create_requested_word_entry(payload, user_id, reviewer_display_name(user_id))
-    record_stat_action("request_new_word", "word", word["id"], metadata={"email": email})
+    record_stat_action("request_new_word", "word", word["id"], metadata={"email": email or "", "anonymous": not bool(email)})
     return {
         "saved": True,
         "word": {
@@ -3420,6 +4396,14 @@ async def request_new_word(payload: WordCreateRequest, request: Request, respons
             "request_count": len(word.get("requests") or []),
         },
     }
+
+
+@app.post("/words/candidates")
+async def create_word_candidate(payload: WordCreateRequest, request: Request, response: Response):
+    user_id = review_user_id(request, response)
+    word = create_requested_word_entry(payload, user_id, reviewer_display_name(user_id))
+    record_stat_action("request_word_candidate", "word", word["id"])
+    return {"saved": True, "word": public_word_entry(word, load_stats().get("words", {}), user_id)}
 
 
 @app.post("/words/{word_id}/rating")
@@ -3487,6 +4471,40 @@ async def report_word_issue(word_id: str, payload: WordIssueRequest):
     db["words"][word_id] = word
     save_word_db(db)
     return {"saved": True, "word": {k: word.get(k) for k in ("id", "source", "taigi", "tailo", "problem", "problem_reason")}}
+
+
+@app.post("/words/{word_id}/token-reviews")
+async def save_word_token_reviews(word_id: str, payload: WordTokenReviewRequest, request: Request, response: Response):
+    if not payload.tokens:
+        raise HTTPException(status_code=400, detail={"message": "請先選取要標示的詞。"})
+    db = load_word_db()
+    word = db.get("words", {}).get(word_id)
+    if not word:
+        raise HTTPException(status_code=404, detail={"message": "找不到這個詞語。"})
+    token_sources = {item.get("source") for item in segment_token_entries(str(word.get("source") or ""), db)}
+    user_id = review_user_id(request, response)
+    token_reviews = word.setdefault("token_reviews", {})
+    user_reviews = token_reviews.setdefault(user_id, {})
+    now = time.time()
+    saved = 0
+    for item in payload.tokens:
+        source = item.source.strip()
+        if not source or source not in token_sources:
+            continue
+        existing = user_reviews.get(source, {})
+        user_reviews[source] = {
+            "status": item.status,
+            "created_at": existing.get("created_at", now) if isinstance(existing, dict) else now,
+            "updated_at": now,
+        }
+        saved += 1
+    if saved == 0:
+        raise HTTPException(status_code=400, detail={"message": "沒有可儲存的斷詞標示。"})
+    word["updated_at"] = now
+    db["words"][word_id] = word
+    save_word_db(db)
+    record_stat_action("review_word_tokens", "word", word_id, metadata={"count": saved})
+    return {"saved": True, "word": public_word_entry(word, load_stats().get("words", {}), user_id)}
 
 
 @app.post("/words/{word_id}/translations")
@@ -3623,6 +4641,12 @@ async def update_admin_settings(
         "api_access_token": settings.api_access_token.strip(),
         "postgres_dsn": settings.postgres_dsn.strip(),
         "postgres_schema": schema_name,
+        "translator_backend": settings.translator_backend,
+        "translator_api_base_url": settings.translator_api_base_url.strip().rstrip("/"),
+        "translator_api_key": settings.translator_api_key.strip(),
+        "translator_model": settings.translator_model.strip(),
+        "translator_target_language": settings.translator_target_language,
+        "translator_timeout_seconds": max(5, min(int(settings.translator_timeout_seconds), 600)),
         "llm_api_base_url": settings.llm_api_base_url.strip().rstrip("/"),
         "llm_api_key": settings.llm_api_key.strip(),
         "llm_model": settings.llm_model.strip(),
@@ -3690,6 +4714,7 @@ async def create_job(
         created_at=time.time(),
         updated_at=time.time(),
         chinese_text=payload.chinese_text,
+        metadata={"create_payload": payload.model_dump()},
     )
     app_data["jobs"].add(job)
     record_stat_action("create_job", "job", job_id)
@@ -3720,18 +4745,20 @@ async def list_jobs(
 async def get_job(
     job_id: str,
     request: Request,
+    response: Response,
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
     authorization: Annotated[Optional[str], Header()] = None,
 ):
     job = app_data["jobs"].get(job_id)
     require_job_access(job, request, taigi_web_token_cookie, authorization)
-    return present_job(job, is_authorized(request, taigi_web_token_cookie, authorization), review_user_id(request))
+    return present_job(job, is_authorized(request, taigi_web_token_cookie, authorization), review_user_id(request, response))
 
 
 @app.get("/jobs/{job_id}/segments")
 async def get_job_segments(
     job_id: str,
     request: Request,
+    response: Response,
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
     authorization: Annotated[Optional[str], Header()] = None,
 ):
@@ -3739,24 +4766,31 @@ async def get_job_segments(
     require_job_access(job, request, taigi_web_token_cookie, authorization)
     output_dir = Path(job.output_dir or JOB_ROOT / job_id / "output")
     segments_path = output_dir / "segments.json"
-    if not segments_path.exists():
+    if not state_json_exists(segments_path):
         return {"segments": [], "reviews": []}
-    payload = json.loads(segments_path.read_text(encoding="utf-8"))
+    payload = load_state_json_file(segments_path, {"segments": []})
     reviews = load_reviews(job)
-    user_id = review_user_id(request)
+    user_id = review_user_id(request, response)
+    word_db = load_word_db()
     segments = payload.get("segments", [])
     for segment in segments:
+        segment_index = int(segment.get("index") or 0)
         stats = segment_review_stats(reviews, int(segment.get("index") or 0), user_id)
         segment.update(stats)
         segment["rating"] = stats["my_rating"]
         segment["feedback_count"] = stats["rating_count"]
+        review_statuses = token_review_statuses(reviews, segment_index, user_id)
+        tokens = segment_token_entries(str(segment.get("source_text") or ""), word_db)
+        for token in tokens:
+            token["review_status"] = review_statuses.get(str(token.get("source") or ""), "")
+        segment["source_tokens"] = tokens
     return {"segments": segments, "reviews": reviews}
 
 
 def persist_segment_feedback(job: Job, segment_index: int, feedback: SegmentFeedback, user_id: str) -> tuple[dict, dict]:
     output_dir = Path(job.output_dir or JOB_ROOT / job.id / "output")
     segments_path = output_dir / "segments.json"
-    if not segments_path.exists():
+    if not state_json_exists(segments_path):
         raise HTTPException(status_code=404, detail="Segments not found")
 
     reviews = load_reviews(job)
@@ -3784,7 +4818,7 @@ def persist_segment_feedback(job: Job, segment_index: int, feedback: SegmentFeed
     save_reviews(job, reviews)
     stats = segment_review_stats(reviews, segment_index, user_id)
 
-    segments_payload = json.loads(segments_path.read_text(encoding="utf-8"))
+    segments_payload = load_state_json_file(segments_path, {"segments": []})
     matched = False
     for segment in segments_payload.get("segments", []):
         if int(segment.get("index") or 0) == segment_index:
@@ -3801,7 +4835,7 @@ def persist_segment_feedback(job: Job, segment_index: int, feedback: SegmentFeed
             break
     if not matched:
         raise HTTPException(status_code=404, detail={"message": "找不到這個分段。"})
-    segments_path.write_text(json.dumps(segments_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_state_json_file(segments_path, segments_payload)
     remember_feedback(job.id, segment_index, feedback)
     return review, stats
 
@@ -3861,12 +4895,27 @@ async def save_segment_feedback(
     authorization: Annotated[Optional[str], Header()] = None,
 ):
     if feedback.rating < 1 or feedback.rating > 5:
-        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
-    job = app_data["jobs"].get(job_id)
-    require_job_access(job, request, taigi_web_token_cookie, authorization)
+        has_feedback = (
+            feedback.note.strip()
+            or feedback.corrected_taigi_text.strip()
+            or feedback.corrected_tailo_text.strip()
+            or any(
+                item.source_phrase.strip()
+                or item.taigi_correction.strip()
+                or item.tailo_correction.strip()
+                or item.note.strip()
+                or item.status
+                for item in feedback.corrections
+            )
+        )
+        if feedback.rating != 0 or not has_feedback:
+            raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
+    requested_job = app_data["jobs"].get(job_id)
+    require_job_access(requested_job, request, taigi_web_token_cookie, authorization)
+    job = source_job_for_segment_regeneration(requested_job)
     user_id = review_user_id(request, response)
     review, stats = persist_segment_feedback(job, segment_index, feedback, user_id)
-    record_stat_action("rate_segment", "segment", f"{job_id}:{segment_index}")
+    record_stat_action("rate_segment", "segment", f"{job.id}:{segment_index}")
     return {"saved": True, "review": review, "stats": stats}
 
 
@@ -3882,16 +4931,17 @@ async def regenerate_segment_audio(
 ):
     if payload.rating and (payload.rating < 1 or payload.rating > 5):
         raise HTTPException(status_code=400, detail={"message": "評分必須介於 1 到 5。"})
-    job = app_data["jobs"].get(job_id)
-    require_job_access(job, request, taigi_web_token_cookie, authorization)
+    requested_job = app_data["jobs"].get(job_id)
+    require_job_access(requested_job, request, taigi_web_token_cookie, authorization)
+    job = source_job_for_segment_regeneration(requested_job)
     if job.status != "complete":
         raise HTTPException(status_code=409, detail={"message": "只有完成的工作可以重生指定分段。"})
 
-    output_dir = Path(job.output_dir or JOB_ROOT / job_id / "output")
+    output_dir = Path(job.output_dir or JOB_ROOT / job.id / "output")
     segments_path = output_dir / "segments.json"
-    if not segments_path.exists():
+    if not state_json_exists(segments_path):
         raise HTTPException(status_code=404, detail={"message": "找不到分段資料。"})
-    segments_payload = json.loads(segments_path.read_text(encoding="utf-8"))
+    segments_payload = load_state_json_file(segments_path, {"segments": []})
     target = next((segment for segment in segments_payload.get("segments", []) if int(segment.get("index") or 0) == segment_index), None)
     if not target:
         raise HTTPException(status_code=404, detail={"message": "找不到這個分段。"})
@@ -3906,50 +4956,31 @@ async def regenerate_segment_audio(
             corrections=payload.corrections,
         )
         persist_segment_feedback(job, segment_index, feedback, user_id)
-        segments_payload = json.loads(segments_path.read_text(encoding="utf-8"))
+        segments_payload = load_state_json_file(segments_path, {"segments": []})
         target = next(segment for segment in segments_payload.get("segments", []) if int(segment.get("index") or 0) == segment_index)
 
-    new_taigi = (payload.corrected_taigi_text or target.get("corrected_taigi_text") or target.get("taigi_text") or "").strip()
-    if not new_taigi:
-        raise HTTPException(status_code=400, detail={"message": "請先提供修正後台語文字，才能重新產生這段語音。"})
-    new_tailo = (payload.corrected_tailo_text or target.get("corrected_tailo_text") or "").strip() or tailo_for(new_taigi)
+    replacement = segment_replacement_from_texts(
+        target,
+        payload.corrected_taigi_text,
+        payload.corrected_tailo_text,
+    )
+    if not replacement["synthesis_text"]:
+        raise HTTPException(status_code=400, detail={"message": "請先提供修正後台語文字或修正後台羅，才能重新產生這段語音。"})
 
     admin_or_token = is_authorized(request, taigi_web_token_cookie, authorization)
-
-    def regenerate_worker():
-        previous_stage = job.stage
-        previous_progress = job.progress
-        app_data["jobs"].update(job_id, stage=f"Regenerating segment {segment_index}", progress=90)
-        try:
-            regenerated, audio_path, video_path, zip_path = regenerate_job_segments_from_texts(
-                job,
-                segments_payload,
-                {segment_index: (new_taigi, new_tailo)},
-            )
-            target_segment = regenerated[0]
-            updated_job = app_data["jobs"].update(
-                job_id,
-                stage="Complete",
-                progress=100,
-                taigi_text="\n".join(str(segment.get("taigi_text") or "") for segment in segments_payload.get("segments", [])),
-                tailo_text="\n".join(str(segment.get("tailo_text") or "") for segment in segments_payload.get("segments", [])),
-                audio_path=str(audio_path),
-                video_path=str(video_path or job.video_path) if (video_path or job.video_path) else None,
-                zip_path=str(zip_path),
-                error=None,
-            )
-            record_stat_action("regenerate_segment", "segment", f"{job_id}:{segment_index}")
-            schedule_public_snapshot_export()
-            return {
-                "regenerated": True,
-                "job": present_job(updated_job, admin_or_token, user_id),
-                "segment": target_segment,
-            }
-        except Exception as exc:
-            app_data["jobs"].update(job_id, stage=previous_stage, progress=previous_progress, error=str(exc))
-            raise HTTPException(status_code=500, detail={"message": f"重新產生分段失敗：{exc}"}) from exc
-
-    return await asyncio.to_thread(regenerate_worker)
+    regeneration_job = enqueue_segment_regeneration_job(
+        job,
+        user_id,
+        {segment_index: replacement},
+        0 if is_private_client(request) or admin_or_token else 10,
+    )
+    record_stat_action("queue_regenerate_segment", "segment", f"{job.id}:{segment_index}", metadata={"job_id": regeneration_job.id})
+    return {
+        "queued": True,
+        "job": present_job(regeneration_job, admin_or_token, user_id),
+        "source_job": present_job(job, admin_or_token, user_id),
+        "segment_index": segment_index,
+    }
 
 
 @app.post("/jobs/{job_id}/segments/regenerate-reviewed")
@@ -3960,74 +4991,59 @@ async def regenerate_reviewed_segments(
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
     authorization: Annotated[Optional[str], Header()] = None,
 ):
-    job = app_data["jobs"].get(job_id)
-    require_job_access(job, request, taigi_web_token_cookie, authorization)
+    requested_job = app_data["jobs"].get(job_id)
+    require_job_access(requested_job, request, taigi_web_token_cookie, authorization)
+    job = source_job_for_segment_regeneration(requested_job)
     if job.status != "complete":
         raise HTTPException(status_code=409, detail={"message": "只有完成的工作可以批次重生分段。"})
 
-    output_dir = Path(job.output_dir or JOB_ROOT / job_id / "output")
+    output_dir = Path(job.output_dir or JOB_ROOT / job.id / "output")
     segments_path = output_dir / "segments.json"
-    if not segments_path.exists():
+    if not state_json_exists(segments_path):
         raise HTTPException(status_code=404, detail={"message": "找不到分段資料。"})
-    segments_payload = json.loads(segments_path.read_text(encoding="utf-8"))
+    segments_payload = load_state_json_file(segments_path, {"segments": []})
     segment_by_index = {
         int(segment.get("index") or 0): segment
         for segment in segments_payload.get("segments", [])
     }
 
-    replacements: dict[int, tuple[str, str]] = {}
+    replacements: dict[int, dict[str, str]] = {}
     for review in sorted(load_reviews(job), key=lambda item: item.get("updated_at") or item.get("created_at") or 0):
         idx = int(review.get("segment_index") or 0)
         if idx <= 0 or idx not in segment_by_index:
             continue
         corrected_taigi = str(review.get("corrected_taigi_text") or "").strip()
         corrected_tailo = str(review.get("corrected_tailo_text") or "").strip()
-        if payload.only_with_corrections and not corrected_taigi:
+        if payload.only_with_corrections and not (corrected_taigi or corrected_tailo):
             continue
         segment = segment_by_index[idx]
-        taigi_text = corrected_taigi or str(segment.get("corrected_taigi_text") or segment.get("taigi_text") or "").strip()
-        tailo_text = corrected_tailo or str(segment.get("corrected_tailo_text") or segment.get("tailo_text") or "").strip()
-        if taigi_text:
-            replacements[idx] = (taigi_text, tailo_text)
+        replacement = segment_replacement_from_texts(segment, corrected_taigi, corrected_tailo)
+        if replacement["synthesis_text"]:
+            replacements[idx] = replacement
 
     if not replacements:
         raise HTTPException(status_code=400, detail={"message": "目前沒有已儲存回饋的分段可重新產生。"})
 
     admin_or_token = is_authorized(request, taigi_web_token_cookie, authorization)
     user_id = review_user_id(request)
-
-    def regenerate_reviewed_worker():
-        previous_stage = job.stage
-        previous_progress = job.progress
-        app_data["jobs"].update(job_id, stage=f"Regenerating {len(replacements)} reviewed segments", progress=88)
-        try:
-            regenerated, audio_path, video_path, zip_path = regenerate_job_segments_from_texts(job, segments_payload, replacements)
-            updated_job = app_data["jobs"].update(
-                job_id,
-                stage="Complete",
-                progress=100,
-                taigi_text="\n".join(str(segment.get("taigi_text") or "") for segment in segments_payload.get("segments", [])),
-                tailo_text="\n".join(str(segment.get("tailo_text") or "") for segment in segments_payload.get("segments", [])),
-                audio_path=str(audio_path),
-                video_path=str(video_path or job.video_path) if (video_path or job.video_path) else None,
-                zip_path=str(zip_path),
-                error=None,
-            )
-            for segment in regenerated:
-                record_stat_action("regenerate_segment", "segment", f"{job_id}:{segment.get('index')}")
-            record_stat_action("regenerate_reviewed_segments", "job", job_id, metadata={"segment_count": len(regenerated)})
-            schedule_public_snapshot_export()
-            return {
-                "regenerated": True,
-                "segment_count": len(regenerated),
-                "segments": regenerated,
-                "job": present_job(updated_job, admin_or_token, user_id),
-            }
-        except Exception as exc:
-            app_data["jobs"].update(job_id, stage=previous_stage, progress=previous_progress, error=str(exc))
-            raise HTTPException(status_code=500, detail={"message": f"重新產生已回饋分段失敗：{exc}"}) from exc
-
-    return await asyncio.to_thread(regenerate_reviewed_worker)
+    regeneration_job = enqueue_segment_regeneration_job(
+        job,
+        user_id,
+        replacements,
+        0 if is_private_client(request) or admin_or_token else 10,
+    )
+    record_stat_action(
+        "queue_regenerate_reviewed_segments",
+        "job",
+        job.id,
+        metadata={"segment_count": len(replacements), "job_id": regeneration_job.id},
+    )
+    return {
+        "queued": True,
+        "segment_count": len(replacements),
+        "job": present_job(regeneration_job, admin_or_token, user_id),
+        "source_job": present_job(job, admin_or_token, user_id),
+    }
 
 
 @app.post("/jobs/{job_id}/regenerate")
@@ -4042,9 +5058,9 @@ async def regenerate_job_from_corrections(
     require_job_access(source_job, request, taigi_web_token_cookie, authorization)
     output_dir = Path(source_job.output_dir or JOB_ROOT / job_id / "output")
     segments_path = output_dir / "segments.json"
-    if not segments_path.exists():
+    if not state_json_exists(segments_path):
         raise HTTPException(status_code=404, detail={"message": "找不到分段資料，無法用修正稿重新生成。"})
-    segments = json.loads(segments_path.read_text(encoding="utf-8")).get("segments", [])
+    segments = load_state_json_file(segments_path, {"segments": []}).get("segments", [])
     if not segments:
         raise HTTPException(status_code=400, detail={"message": "這個工作沒有可重新生成的分段。"})
 
@@ -4085,11 +5101,35 @@ async def regenerate_job_from_corrections(
         created_at=time.time(),
         updated_at=time.time(),
         chinese_text=payload.chinese_text,
+        metadata={"create_payload": payload.model_dump(), "source_job_id": source_job.id},
     )
     app_data["jobs"].add(new_job)
     record_stat_action("regenerate_job", "job", new_job_id)
     enqueue_job(0 if is_private_client(request) or admin_or_token else 10, new_job_id, payload)
     return present_job(new_job, admin_or_token, owner_id)
+
+
+@app.post("/jobs/{job_id}/retry")
+async def retry_job(
+    job_id: str,
+    payload: RetryJobRequest,
+    request: Request,
+    response: Response,
+    taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
+):
+    job = app_data["jobs"].get(job_id)
+    require_job_access(job, request, taigi_web_token_cookie, authorization)
+    admin_or_token = is_authorized(request, taigi_web_token_cookie, authorization)
+    if payload.mode == "resume":
+        # The current pipelines overwrite their final outputs safely, but do not yet
+        # persist a resumable step cursor. Treat resume as a queued restart.
+        mode = "resume_as_restart"
+    else:
+        mode = "restart"
+    updated, _ = enqueue_retry_job(job, 0 if is_private_client(request) or admin_or_token else 10)
+    record_stat_action("retry_job", "job", job_id, metadata={"kind": job.kind, "mode": mode})
+    return present_job(updated, admin_or_token, review_user_id(request, response))
 
 
 @app.delete("/jobs/{job_id}")

@@ -72,6 +72,11 @@ Each job runs:
 7. package outputs as a zip
 8. optionally copy selected files to OneDrive
 
+The Chinese-to-Taigi step defaults to the built-in rule translator. You can
+optionally route full sentence segments through a TW-Hokkien-LLM Translator
+model served by an OpenAI-compatible Completions API. Word-level lexicon
+generation still uses the built-in translator to avoid excessive model calls.
+
 Completed jobs also expose a segment review workspace. Each segment keeps:
 
 - source Chinese text
@@ -88,6 +93,12 @@ taigi_web_jobs/translation_memory.json
 
 Term-level corrections in that file are applied before the built-in phrase map on future translation jobs.
 
+Structured state is stored in both SQLite and JSON files. SQLite is the
+authoritative backup/export source, while JSON files remain as inspectable local
+artifacts. On startup, existing JSON state that has not yet been imported is
+backfilled into SQLite, including job records, segment metadata, subtitles, and
+reviews.
+
 ## Environment
 
 Useful variables:
@@ -103,6 +114,11 @@ TAIGI_WEB_FFPROBE=/opt/homebrew/bin/ffprobe
 TAIGI_WEB_VOXCPM_BIN=/path/to/voxcpm
 TAIGI_WEB_DEFAULT_DEVICE=mps
 TAIGI_WEB_COPY_TO_ONEDRIVE=1
+TAIGI_WEB_TRANSLATOR_BACKEND=rule
+TAIGI_WEB_TRANSLATOR_API_BASE_URL=http://127.0.0.1:8080/v1
+TAIGI_WEB_TRANSLATOR_MODEL=Bohanlu/Taigi-Llama-2-Translator-7B
+TAIGI_WEB_TRANSLATOR_API_KEY=
+TAIGI_WEB_TRANSLATOR_TARGET_LANGUAGE=HAN
 ```
 
 The default reference audio is:

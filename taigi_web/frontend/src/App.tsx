@@ -61,14 +61,30 @@ const UI_LANGUAGE_LABELS: Record<UiLanguage, string> = Object.fromEntries(
 
 const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
   'zh-Hant': {
+    siteName: '台語語音影片網',
     subtitle: '中文稿 → 台語稿 → 語音 → 字幕波形影片',
     work: '工作',
     jobs: '工作總覽',
     lexicon: '語詞資料庫',
     stats: '統計趨勢',
     sources: '來源授權',
+    about: '關於',
     refresh: '重新整理',
     signOut: '登出',
+    dateTimeFormat: '時間格式',
+    dateSystem: '系統',
+    dateTaiwan: '台灣',
+    dateUs: '美式',
+    dateIso: 'ISO',
+    segmentUnit: '段',
+    createdLabel: '建立',
+    elapsedLabel: '耗時',
+    ratingLabel: '平均',
+    voteUnit: '票',
+    secondsUnit: '秒',
+    minutesUnit: '分',
+    hoursUnit: '小時',
+    canSubmit: '可以送出',
     public: 'Public',
     admin: 'Admin',
     user: 'User',
@@ -99,16 +115,42 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     multilingualCorpus: '多語系語料',
     pendingReview: '待補稿',
     draft: '草稿',
+    aboutTitle: '關於台語語音影片網',
+    aboutIntro: '這個專案把中文稿轉成台語文字與台羅輔助稿，再分段產生語音、字幕與音訊波形影片，方便做台語內容製作、校稿、詞庫整理與語音品質回饋。',
+    aboutFlowTitle: '核心流程',
+    aboutFlowText: '輸入中文稿後，系統會產生台語稿與台羅，切成可檢查的段落，逐段生成語音，最後合併成完整音訊與字幕影片。',
+    aboutReviewTitle: '校稿與再生成',
+    aboutReviewText: '使用者可以對整段、單一分段、語詞與語音版本評分，留下修正後台語文字或台羅，並把需要修正的段落重新排入佇列生成。',
+    aboutLexiconTitle: '語詞資料庫',
+    aboutLexiconText: '語詞與固定語句可查詢、播放、評分、重新產生語音，也能針對長語句斷詞標示有問題或沒問題的詞彙。',
+    aboutProjectTitle: '專案網址',
+    aboutProjectText: '本專案基於 VoxCPM 延伸成台語語音影片與詞庫工作介面。',
   },
   'zh-Hans': {
+    siteName: '台语语音影片网',
     subtitle: '中文稿 → 台语稿 → 语音 → 字幕波形影片',
     work: '工作',
     jobs: '工作总览',
     lexicon: '词语数据库',
     stats: '统计趋势',
     sources: '来源授权',
+    about: '关于',
     refresh: '刷新',
     signOut: '登出',
+    dateTimeFormat: '时间格式',
+    dateSystem: '系统',
+    dateTaiwan: '台湾',
+    dateUs: '美式',
+    dateIso: 'ISO',
+    segmentUnit: '段',
+    createdLabel: '建立',
+    elapsedLabel: '耗时',
+    ratingLabel: '平均',
+    voteUnit: '票',
+    secondsUnit: '秒',
+    minutesUnit: '分',
+    hoursUnit: '小时',
+    canSubmit: '可以送出',
     public: 'Public',
     admin: 'Admin',
     user: 'User',
@@ -139,16 +181,42 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     multilingualCorpus: '多语系语料',
     pendingReview: '待补稿',
     draft: '草稿',
+    aboutTitle: '关于台语语音影片网',
+    aboutIntro: '这个项目把中文稿转换成台语文字与台罗辅助稿，再分段产生语音、字幕与音讯波形影片，方便做台语内容制作、校稿、词库整理与语音品质回馈。',
+    aboutFlowTitle: '核心流程',
+    aboutFlowText: '输入中文稿后，系统会产生台语稿与台罗，切成可检查的段落，逐段生成语音，最后合并成完整音讯与字幕影片。',
+    aboutReviewTitle: '校稿与再生成',
+    aboutReviewText: '使用者可以对整段、单一分段、词语与语音版本评分，留下修正后台语文字或台罗，并把需要修正的段落重新排入队列生成。',
+    aboutLexiconTitle: '词语数据库',
+    aboutLexiconText: '词语与固定语句可查询、播放、评分、重新产生语音，也能针对长语句断词标示有问题或没问题的词汇。',
+    aboutProjectTitle: '项目网址',
+    aboutProjectText: '本项目基于 VoxCPM 延伸成台语语音影片与词库工作界面。',
   },
   en: {
+    siteName: 'Taigi Voice Video Web',
     subtitle: 'Chinese draft → Taigi draft → Speech → Captioned waveform video',
     work: 'Work',
     jobs: 'Jobs',
     lexicon: 'Lexicon',
     stats: 'Stats',
     sources: 'Sources',
+    about: 'About',
     refresh: 'Refresh',
     signOut: 'Sign out',
+    dateTimeFormat: 'Time format',
+    dateSystem: 'System',
+    dateTaiwan: 'Taiwan',
+    dateUs: 'US',
+    dateIso: 'ISO',
+    segmentUnit: 'segments',
+    createdLabel: 'Created',
+    elapsedLabel: 'Duration',
+    ratingLabel: 'Average',
+    voteUnit: 'votes',
+    secondsUnit: 'sec',
+    minutesUnit: 'min',
+    hoursUnit: 'hr',
+    canSubmit: 'Ready',
     public: 'Public',
     admin: 'Admin',
     user: 'User',
@@ -179,16 +247,42 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     multilingualCorpus: 'Multilingual corpus',
     pendingReview: 'Pending',
     draft: 'Draft',
+    aboutTitle: 'About Taigi Voice Video Web',
+    aboutIntro: 'This project turns Chinese drafts into Taigi text and Tailo helper text, then generates segmented speech, captions, and waveform videos for Taigi content production, review, lexicon work, and audio quality feedback.',
+    aboutFlowTitle: 'Core workflow',
+    aboutFlowText: 'After a Chinese draft is entered, the system creates Taigi and Tailo text, splits it into reviewable segments, generates speech segment by segment, and combines everything into complete audio and a captioned video.',
+    aboutReviewTitle: 'Review and regeneration',
+    aboutReviewText: 'Users can rate full jobs, individual segments, lexicon entries, and audio versions, save corrected Taigi or Tailo text, and queue corrected segments for regeneration.',
+    aboutLexiconTitle: 'Lexicon database',
+    aboutLexiconText: 'Words and fixed phrases can be searched, played, rated, regenerated, and segmented so problematic words inside longer phrases can be marked clearly.',
+    aboutProjectTitle: 'Project URL',
+    aboutProjectText: 'This project extends VoxCPM into a Taigi voice video and lexicon workflow interface.',
   },
   ja: {
+    siteName: '台湾語音声動画ウェブ',
     subtitle: '中国語原稿 → 台湾語原稿 → 音声 → 字幕付き波形動画',
     work: '作成',
     jobs: 'ジョブ一覧',
     lexicon: '語彙データベース',
     stats: '統計',
     sources: '出典',
+    about: '概要',
     refresh: '更新',
     signOut: 'サインアウト',
+    dateTimeFormat: '日時形式',
+    dateSystem: 'システム',
+    dateTaiwan: '台湾',
+    dateUs: '米国',
+    dateIso: 'ISO',
+    segmentUnit: '段落',
+    createdLabel: '作成',
+    elapsedLabel: '所要時間',
+    ratingLabel: '平均',
+    voteUnit: '票',
+    secondsUnit: '秒',
+    minutesUnit: '分',
+    hoursUnit: '時間',
+    canSubmit: '送信可能',
     public: 'Public',
     admin: 'Admin',
     user: 'User',
@@ -219,16 +313,42 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     multilingualCorpus: '多言語コーパス',
     pendingReview: '未翻訳',
     draft: '草稿',
+    aboutTitle: '台湾語音声動画ウェブについて',
+    aboutIntro: 'このプロジェクトは中国語原稿を台湾語本文と台羅補助文に変換し、分割音声、字幕、音声波形動画を生成します。台湾語コンテンツ制作、校正、語彙整理、音声品質フィードバックに使えます。',
+    aboutFlowTitle: '基本フロー',
+    aboutFlowText: '中国語原稿を入力すると、システムが台湾語本文と台羅を生成し、確認しやすい段落に分割して、段落ごとに音声を生成し、最後に音声と字幕動画を結合します。',
+    aboutReviewTitle: '校正と再生成',
+    aboutReviewText: '全体、各段落、語彙、音声バージョンを評価し、修正後の台湾語本文や台羅を保存して、必要な段落をキューに戻して再生成できます。',
+    aboutLexiconTitle: '語彙データベース',
+    aboutLexiconText: '語彙と定型句は検索、再生、評価、音声再生成ができ、長い句の中で問題のある語を分かち書き単位で明示できます。',
+    aboutProjectTitle: 'プロジェクト URL',
+    aboutProjectText: 'このプロジェクトは VoxCPM を台湾語音声動画と語彙作業のインターフェースとして拡張したものです。',
   },
   ko: {
+    siteName: '대만어 음성 영상 웹',
     subtitle: '중국어 원고 → 대만어 원고 → 음성 → 자막 파형 영상',
     work: '작업',
     jobs: '작업 목록',
     lexicon: '어휘 데이터베이스',
     stats: '통계',
     sources: '출처',
+    about: '소개',
     refresh: '새로고침',
     signOut: '로그아웃',
+    dateTimeFormat: '시간 형식',
+    dateSystem: '시스템',
+    dateTaiwan: '대만',
+    dateUs: '미국식',
+    dateIso: 'ISO',
+    segmentUnit: '구간',
+    createdLabel: '생성',
+    elapsedLabel: '소요 시간',
+    ratingLabel: '평균',
+    voteUnit: '표',
+    secondsUnit: '초',
+    minutesUnit: '분',
+    hoursUnit: '시간',
+    canSubmit: '제출 가능',
     public: 'Public',
     admin: 'Admin',
     user: 'User',
@@ -259,16 +379,42 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     multilingualCorpus: '다국어 말뭉치',
     pendingReview: '대기',
     draft: '초안',
+    aboutTitle: '대만어 음성 영상 웹 소개',
+    aboutIntro: '이 프로젝트는 중국어 원고를 대만어 문장과 Tailo 보조문으로 바꾸고, 분할 음성, 자막, 오디오 파형 영상을 생성하여 대만어 콘텐츠 제작, 검수, 어휘 정리, 음성 품질 피드백에 활용합니다.',
+    aboutFlowTitle: '핵심 흐름',
+    aboutFlowText: '중국어 원고를 입력하면 시스템이 대만어와 Tailo 텍스트를 만들고, 검토 가능한 단위로 나눈 뒤, 구간별 음성을 생성하고 최종 오디오와 자막 영상을 합칩니다.',
+    aboutReviewTitle: '검수와 재생성',
+    aboutReviewText: '전체 작업, 개별 구간, 어휘, 음성 버전에 평점을 남기고 수정된 대만어 또는 Tailo를 저장한 뒤 필요한 구간을 다시 큐에 넣어 생성할 수 있습니다.',
+    aboutLexiconTitle: '어휘 데이터베이스',
+    aboutLexiconText: '어휘와 고정 표현은 검색, 재생, 평점, 음성 재생성이 가능하며 긴 표현 안의 문제가 있는 단어를 분절 단위로 표시할 수 있습니다.',
+    aboutProjectTitle: '프로젝트 URL',
+    aboutProjectText: '이 프로젝트는 VoxCPM을 대만어 음성 영상과 어휘 작업 인터페이스로 확장한 것입니다.',
   },
   taigi: {
+    siteName: '台語聲音影片網',
     subtitle: '華語稿 → 台語稿 → 聲音 → 字幕波形影片',
     work: '工課',
     jobs: '工課總覽',
     lexicon: '語詞資料庫',
     stats: '統計趨勢',
     sources: '來源授權',
+    about: '關於',
     refresh: '閣整理',
     signOut: '登出',
+    dateTimeFormat: '時間格式',
+    dateSystem: '系統',
+    dateTaiwan: '台灣',
+    dateUs: '美式',
+    dateIso: 'ISO',
+    segmentUnit: '段',
+    createdLabel: '建立',
+    elapsedLabel: '開偌久',
+    ratingLabel: '平均',
+    voteUnit: '票',
+    secondsUnit: '秒',
+    minutesUnit: '分',
+    hoursUnit: '點鐘',
+    canSubmit: '會當送出',
     public: 'Public',
     admin: 'Admin',
     user: 'User',
@@ -299,16 +445,42 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     multilingualCorpus: '多語系語料',
     pendingReview: '咧等補稿',
     draft: '草稿',
+    aboutTitle: '關於台語聲音影片網',
+    aboutIntro: '這个專案共華語稿轉做台語文字佮台羅輔助稿，閣分段產生聲音、字幕佮音訊波形影片，方便做台語內容、校稿、整理語詞資料庫佮回饋聲音品質。',
+    aboutFlowTitle: '核心流程',
+    aboutFlowText: '輸入華語稿了後，系統會產生台語稿佮台羅，切做會當檢查的段落，逐段產生聲音，最後合做完整音訊佮字幕影片。',
+    aboutReviewTitle: '校稿佮閣再生成',
+    aboutReviewText: '使用者會當對規段、單一分段、語詞佮聲音版本評分，留修正後台語文字抑是台羅，閣共愛修正的段落排入佇列重做。',
+    aboutLexiconTitle: '語詞資料庫',
+    aboutLexiconText: '語詞佮固定語句會當查詢、播放、評分、閣再產生聲音，也會當對較長的語句斷詞標示有問題抑是無問題的詞。',
+    aboutProjectTitle: '專案網址',
+    aboutProjectText: '本專案是佇 VoxCPM 的基礎頂懸，延伸做台語聲音影片佮語詞資料庫的工課介面。',
   },
   tailo: {
+    siteName: 'Tâi-gí siann-im iánn-phìnn bāng',
     subtitle: 'Huâ-gí khó → Tâi-gí khó → Siann-im → Jī-bō 波形影片',
     work: 'Kang-khò',
     jobs: 'Kang-khò chóng-lám',
     lexicon: 'Gí-sû tsu-liāu-khòo',
     stats: 'Thong-kè',
     sources: 'Guân-thâu',
+    about: 'Kuan-î',
     refresh: 'Koh tsíng-lí',
     signOut: 'Teng-tshut',
+    dateTimeFormat: 'Sî-kan keh-sik',
+    dateSystem: 'Hē-thóng',
+    dateTaiwan: 'Tâi-uân',
+    dateUs: 'Bí-sik',
+    dateIso: 'ISO',
+    segmentUnit: 'tuānn',
+    createdLabel: 'Kiàn-li̍p',
+    elapsedLabel: 'Hùi-sî',
+    ratingLabel: 'Pîng-kun',
+    voteUnit: 'phiò',
+    secondsUnit: 'bió',
+    minutesUnit: 'hun',
+    hoursUnit: 'tiám-tsing',
+    canSubmit: 'Ē-tàng sàng-tshut',
     public: 'Public',
     admin: 'Admin',
     user: 'User',
@@ -339,6 +511,16 @@ const UI_TEXT: Record<UiLanguage, Record<string, string>> = {
     multilingualCorpus: 'Tō-gí-hē gí-liāu',
     pendingReview: 'Tán póo-kó',
     draft: 'Tsháu-kó',
+    aboutTitle: 'Kuan-î Tâi-gí siann-im iánn-phìnn bāng',
+    aboutIntro: 'Tsit-ê tsuan-àn kā Huâ-gí khó tsuán-tsò Tâi-gí bûn-jī kap Tâi-lô hû-tsōo khó, koh hun-tuānn sán-sing siann-im, jī-bō kap im-sìn ph波形 iánn-phìnn.',
+    aboutFlowTitle: 'Hik-sim lâu-thîng',
+    aboutFlowText: 'Su-ji̍p Huâ-gí khó āu, hē-thóng ē sán-sing Tâi-gí khó kap Tâi-lô, tshiat tsò ē-tàng kiám-tsha ê tuānn-lo̍h,逐段 sán-sing siann-im, tsuè-āu ha̍p-tsò uân-tsíng im-sìn kap jī-bō iánn-phìnn.',
+    aboutReviewTitle: 'Kàu-kó kap koh sán-sing',
+    aboutReviewText: 'Sú-iōng-tsiá ē-tàng tuì tsuân-tuānn, tan-it hun-tuānn, gí-sû kap siann-im pán-pún phîng-hun, lâu siu-tsìng āu ê Tâi-gí bûn-jī á-sī Tâi-lô, koh kā ài siu-tsìng ê tuānn-lo̍h pâi ji̍p tuī-lia̍t koh-tsò.',
+    aboutLexiconTitle: 'Gí-sû tsu-liāu-khòo',
+    aboutLexiconText: 'Gí-sû kap kòo-tīng gí-kù ē-tàng tshiau, pòo-hòng, phîng-hun, koh sán-sing siann-im, mā ē-tàng tuì khah tn̂g ê gí-kù hun-sû phiau-sī ū būn-tê á-sī bô būn-tê ê sû.',
+    aboutProjectTitle: 'Tsuan-àn bāng-tsí',
+    aboutProjectText: 'Tsit-ê tsuan-àn tī VoxCPM ê ki-tshóo tíng-bīn iân-sin tsò Tâi-gí siann-im iánn-phìnn kap gí-sû tsu-liāu-khòo kang-khò kài-bīn.',
   },
 };
 
@@ -1052,11 +1234,32 @@ function initialUiLanguage(): UiLanguage {
   return 'zh-Hant';
 }
 
+function initialDateTimeFormat(): DateTimeFormatPreference {
+  try {
+    const stored = window.localStorage.getItem('taigi_web_date_time_format') as DateTimeFormatPreference | null;
+    if (stored && ['system', 'taiwan', 'us', 'iso'].includes(stored)) return stored;
+  } catch {
+    return 'system';
+  }
+  return 'system';
+}
+
 type JobStatus = 'queued' | 'running' | 'complete' | 'failed';
+type CompletedJobSort = 'newest' | 'oldest' | 'rating' | 'plays' | 'duration' | 'title';
+type JobKindFilter = 'all' | 'script' | 'segment_regeneration' | 'word_asset' | 'maintenance';
+type CompletedJobRatingFilter = 'all' | 'rated' | 'unrated';
+type CompletedJobMediaFilter = 'all' | 'video' | 'audio';
+type WordSort = 'rating' | 'newest' | 'plays' | 'usage' | 'source';
+type WordKindFilter = 'all' | 'word' | 'phrase';
+type WordRatingFilter = 'all' | 'rated' | 'unrated';
+type WordMediaFilter = 'all' | 'audio' | 'video' | 'missing_audio';
+type WordStatusFilter = 'all' | 'problem' | 'ok' | 'generating' | 'requested';
+type DateTimeFormatPreference = 'system' | 'taiwan' | 'us' | 'iso';
+type RatingBuckets = Record<'1' | '2' | '3' | '4' | '5', number>;
 
 interface Job {
   id: string;
-  kind?: 'script' | 'word_asset';
+  kind?: 'script' | 'word_asset' | 'segment_regeneration' | 'maintenance';
   title: string;
   status: JobStatus;
   stage: string;
@@ -1105,6 +1308,20 @@ interface Segment {
   corrected_taigi_text?: string;
   corrected_tailo_text?: string;
   regenerated_at?: number;
+  source_tokens?: SegmentToken[];
+}
+
+interface SegmentToken {
+  source: string;
+  taigi: string;
+  tailo: string;
+  word_id?: string;
+  exists?: boolean;
+  problem?: boolean;
+  has_audio?: boolean;
+  has_video?: boolean;
+  generation_status?: string;
+  review_status?: 'problem' | 'ok' | '';
 }
 
 interface SegmentReviewPayload {
@@ -1117,6 +1334,7 @@ interface SegmentReviewPayload {
     taigi_correction: string;
     tailo_correction: string;
     note: string;
+    status?: 'problem' | 'ok' | '';
   }>;
 }
 
@@ -1147,6 +1365,8 @@ interface ApiInfo {
   anonymous_nickname_options?: { value: string; label: string }[];
   translation_memory?: string;
   llm_random_sentence_enabled?: boolean;
+  translator_backend?: 'rule' | 'tw_hokkien_llm';
+  tw_hokkien_llm_translator_enabled?: boolean;
   pipeline: string[];
 }
 
@@ -1156,6 +1376,12 @@ interface AdminSettings {
   api_access_token: string;
   postgres_dsn: string;
   postgres_schema: string;
+  translator_backend: 'rule' | 'tw_hokkien_llm';
+  translator_api_base_url: string;
+  translator_api_key: string;
+  translator_model: string;
+  translator_target_language: 'HAN' | 'HL' | 'POJ';
+  translator_timeout_seconds: number;
   llm_api_base_url: string;
   llm_api_key: string;
   llm_model: string;
@@ -1240,6 +1466,7 @@ interface WordEntry {
   generation_position?: number;
   generation_job_id?: string;
   assets?: WordAsset[];
+  source_tokens?: SegmentToken[];
   static_media?: {
     audio?: string;
     video?: string;
@@ -1255,6 +1482,8 @@ interface WordEntry {
     updated_at?: number;
   }>;
   multilingual_request_count?: number;
+  updated_at?: number;
+  generated_at?: number;
 }
 
 interface WordAsset {
@@ -1290,6 +1519,8 @@ interface StatsSummary {
   jobs_failed: number;
   words_total: number;
   word_queries_total: number;
+  page_visits_total?: number;
+  page_visits_today?: number;
   lexicon_quality?: {
     word_entries_total: number;
     word_entries_rated: number;
@@ -1297,6 +1528,8 @@ interface StatsSummary {
     word_assets_total: number;
     word_assets_rated: number;
     word_assets_unrated: number;
+    word_entry_rating_buckets?: RatingBuckets;
+    word_asset_rating_buckets?: RatingBuckets;
     word_problem_count: number;
     word_problem_rate: number;
     word_regeneration_requests: number;
@@ -1347,13 +1580,14 @@ const statusColor: Record<JobStatus, string> = {
 
 const pipelineSteps = [
   { key: 'translate', label: '翻譯', color: '#1677ff', match: ['Translating'] },
-  { key: 'segment', label: '分段', color: '#13a8a8', match: ['Splitting'] },
-  { key: 'tts', label: '語音', color: '#722ed1', match: ['Generating audio'] },
+  { key: 'segment', label: '分段', color: '#13a8a8', match: ['Splitting', 'Loading source'] },
+  { key: 'tts', label: '語音', color: '#722ed1', match: ['Generating audio', 'Regenerating audio'] },
   { key: 'join', label: '合併', color: '#eb2f96', match: ['Joining'] },
-  { key: 'subtitle', label: '字幕', color: '#fa8c16', match: ['Preparing subtitles'] },
-  { key: 'video', label: '影片', color: '#52c41a', match: ['Rendering waveform video'] },
+  { key: 'subtitle', label: '字幕', color: '#fa8c16', match: ['Preparing'] },
+  { key: 'video', label: '影片', color: '#52c41a', match: ['Rendering'] },
   { key: 'package', label: '打包', color: '#faad14', match: ['Packaging'] },
 ];
+const ratingScores = [5, 4, 3, 2, 1] as const;
 
 function formatTime(value: number) {
   return new Intl.DateTimeFormat(undefined, {
@@ -1375,9 +1609,21 @@ function formatDuration(seconds?: number | null) {
   return `${hours} 小時 ${mins} 分`;
 }
 
+const dateTimeLocales: Record<DateTimeFormatPreference, string | undefined> = {
+  system: undefined,
+  taiwan: 'zh-TW',
+  us: 'en-US',
+  iso: 'sv-SE',
+};
+
 function formatWait(seconds: number) {
   if (seconds <= 0) return '可以送出';
   return formatDuration(seconds) ?? '可以送出';
+}
+
+function formatStableWait(seconds: number) {
+  if (seconds <= 1) return '可以送出';
+  return formatDuration(Math.ceil(seconds)) ?? '可以送出';
 }
 
 function inlineText(value: string) {
@@ -1396,6 +1642,20 @@ function activeStepIndex(job?: Job | null) {
   if (job.status === 'failed') return -1;
   if (job.status === 'queued') return -1;
   return pipelineSteps.findIndex((step) => step.match.some((marker) => job.stage.includes(marker)));
+}
+
+function jobKindLabel(job: Job, t: (key: string) => string) {
+  if (job.kind === 'word_asset') return t('jobKindWord');
+  if (job.kind === 'segment_regeneration') return '重生分段';
+  if (job.kind === 'maintenance') return '維護清理';
+  return t('jobKindScript');
+}
+
+function jobKindColor(job: Job) {
+  if (job.kind === 'word_asset') return 'purple';
+  if (job.kind === 'segment_regeneration') return 'magenta';
+  if (job.kind === 'maintenance') return 'geekblue';
+  return 'cyan';
 }
 
 function PipelineStrip({ job, compact = false }: { job?: Job | null; compact?: boolean }) {
@@ -1448,7 +1708,7 @@ const exampleTexts = [
 ];
 
 function validPageTab(value: string | null) {
-  return value === 'work' || value === 'jobs' || value === 'lexicon' || value === 'stats' || value === 'sources';
+  return value === 'work' || value === 'jobs' || value === 'lexicon' || value === 'stats' || value === 'sources' || value === 'about';
 }
 
 function initialPageTab() {
@@ -1498,21 +1758,37 @@ function App() {
   const [queueStatus, setQueueStatus] = useState<QueueStatus | null>(null);
   const [stats, setStats] = useState<StatsSummary | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobSearch, setJobSearch] = useState('');
+  const [completedJobSort, setCompletedJobSort] = useState<CompletedJobSort>('newest');
+  const [completedJobKindFilter, setCompletedJobKindFilter] = useState<JobKindFilter>('all');
+  const [completedJobRatingFilter, setCompletedJobRatingFilter] = useState<CompletedJobRatingFilter>('all');
+  const [completedJobMediaFilter, setCompletedJobMediaFilter] = useState<CompletedJobMediaFilter>('all');
+  const [showQueuedJobs, setShowQueuedJobs] = useState(false);
   const [words, setWords] = useState<WordEntry[]>([]);
   const [wordQuery, setWordQuery] = useState('');
+  const [wordSort, setWordSort] = useState<WordSort>('rating');
+  const [wordKindFilter, setWordKindFilter] = useState<WordKindFilter>('all');
+  const [wordRatingFilter, setWordRatingFilter] = useState<WordRatingFilter>('all');
+  const [wordMediaFilter, setWordMediaFilter] = useState<WordMediaFilter>('all');
+  const [wordStatusFilter, setWordStatusFilter] = useState<WordStatusFilter>('all');
+  const [expandedWordIds, setExpandedWordIds] = useState<Record<string, boolean>>({});
+  const [selectedWordTokens, setSelectedWordTokens] = useState<Record<string, string[]>>({});
   const wordQueryRef = useRef('');
   const [uiLanguage, setUiLanguage] = useState<UiLanguage>(initialUiLanguage);
+  const [dateTimeFormat, setDateTimeFormat] = useState<DateTimeFormatPreference>(initialDateTimeFormat);
   const [activeTab, setActiveTab] = useState(initialPageTab);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [segmentJobId, setSegmentJobId] = useState<string | null>(null);
   const [feedbackDrafts, setFeedbackDrafts] = useState<Record<number, SegmentReviewPayload>>({});
+  const [selectedSegmentTokens, setSelectedSegmentTokens] = useState<Record<number, string[]>>({});
   const [regeneratingSegments, setRegeneratingSegments] = useState<Record<number, boolean>>({});
   const [jobError, setJobError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [generatingSentence, setGeneratingSentence] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [regeneratingReviewed, setRegeneratingReviewed] = useState(false);
+  const [retryingJobs, setRetryingJobs] = useState<Record<string, boolean>>({});
   const [exportingPostgres, setExportingPostgres] = useState(false);
   const [postgresExportResult, setPostgresExportResult] = useState<PostgresExportResult | null>(null);
   const [syncingStatic, setSyncingStatic] = useState(false);
@@ -1534,16 +1810,133 @@ function App() {
   const isAdmin = !!auth?.is_admin;
   const t = (key: string) => UI_TEXT[uiLanguage]?.[key] ?? UI_TEXT['zh-Hant'][key] ?? key;
   const actionLabel = (key: string) => ACTION_TEXT[uiLanguage]?.[key] ?? ACTION_TEXT['zh-Hant'][key] ?? key;
-  const jobDisplayTitle = (job: Job) => firstSentence(job.chinese_text) || job.title;
+  const formatDateTime = (value: number) => {
+    const date = new Date(value * 1000);
+    if (dateTimeFormat === 'iso') {
+      return new Intl.DateTimeFormat('sv-SE', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).format(date);
+    }
+    return new Intl.DateTimeFormat(dateTimeLocales[dateTimeFormat], {
+      year: dateTimeFormat === 'system' ? undefined : 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(date);
+  };
+  const formatDurationText = (seconds?: number | null) => {
+    if (seconds === null || seconds === undefined) return null;
+    if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)} ${t('secondsUnit')}`;
+    const minutes = Math.floor(seconds / 60);
+    const rest = Math.round(seconds % 60);
+    if (minutes < 60) return `${minutes} ${t('minutesUnit')} ${rest} ${t('secondsUnit')}`;
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return `${hours} ${t('hoursUnit')} ${mins} ${t('minutesUnit')}`;
+  };
+  const formatRatingText = (average?: number | null, count?: number) => (
+    count ? `${t('ratingLabel')} ${average?.toFixed(1)} / 5（${count} ${t('voteUnit')}）` : ''
+  );
+  const formatJobMeta = (job: Job) => ([
+    `${job.segment_count || 0} ${t('segmentUnit')}`,
+    `${t('createdLabel')} ${formatDateTime(job.created_at)}`,
+    formatDurationText(job.elapsed_seconds) ? `${t('elapsedLabel')} ${formatDurationText(job.elapsed_seconds)}` : '',
+    formatRatingText(job.rating_average, job.rating_count),
+  ].filter(Boolean).join(' · '));
+  const jobDisplayTitle = (job: Job) => (job.kind === 'segment_regeneration' ? job.title : firstSentence(job.chinese_text) || job.title);
+  const newestFirst = (a: Job, b: Job) => (b.created_at || b.updated_at || 0) - (a.created_at || a.updated_at || 0);
+  const highestRatedFirst = (a: Job, b: Job) => {
+    const ratingDelta = (b.rating_average || 0) - (a.rating_average || 0);
+    if (ratingDelta) return ratingDelta;
+    const ratingCountDelta = (b.rating_count || 0) - (a.rating_count || 0);
+    if (ratingCountDelta) return ratingCountDelta;
+    return newestFirst(a, b);
+  };
+  const newestWordFirst = (a: WordEntry, b: WordEntry) => (b.updated_at || b.generated_at || 0) - (a.updated_at || a.generated_at || 0);
+  const highestRatedWordFirst = (a: WordEntry, b: WordEntry) => {
+    const ratingDelta = (b.rating_average || 0) - (a.rating_average || 0);
+    if (ratingDelta) return ratingDelta;
+    const ratingCountDelta = (b.rating_count || 0) - (a.rating_count || 0);
+    if (ratingCountDelta) return ratingCountDelta;
+    return newestWordFirst(a, b);
+  };
+  const jobMatchesSearch = (job: Job, query: string) => {
+    const cleaned = query.trim().toLowerCase();
+    if (!cleaned) return true;
+    return [
+      job.id,
+      job.title,
+      job.chinese_text,
+      job.taigi_text,
+      job.tailo_text,
+      job.stage,
+      job.error ?? '',
+      jobKindLabel(job, t),
+      job.status,
+    ].some((value) => String(value || '').toLowerCase().includes(cleaned));
+  };
+  const completedJobs = useMemo(() => {
+    const filtered = jobs.filter((job) => {
+      if (job.status !== 'complete') return false;
+      if (!jobMatchesSearch(job, jobSearch)) return false;
+      if (completedJobKindFilter !== 'all' && job.kind !== completedJobKindFilter) return false;
+      if (completedJobRatingFilter === 'rated' && !(job.rating_count && job.rating_count > 0)) return false;
+      if (completedJobRatingFilter === 'unrated' && (job.rating_count && job.rating_count > 0)) return false;
+      if (completedJobMediaFilter === 'video' && !job.video_path) return false;
+      if (completedJobMediaFilter === 'audio' && !job.audio_path) return false;
+      return true;
+    });
+    return filtered.sort((a, b) => {
+      if (completedJobSort === 'oldest') return (a.created_at || 0) - (b.created_at || 0);
+      if (completedJobSort === 'rating') return highestRatedFirst(a, b);
+      if (completedJobSort === 'plays') return (b.play_count || 0) - (a.play_count || 0) || newestFirst(a, b);
+      if (completedJobSort === 'duration') return (b.elapsed_seconds || 0) - (a.elapsed_seconds || 0) || newestFirst(a, b);
+      if (completedJobSort === 'title') return jobDisplayTitle(a).localeCompare(jobDisplayTitle(b), 'zh-Hant') || newestFirst(a, b);
+      return newestFirst(a, b);
+    });
+  }, [jobs, jobSearch, completedJobKindFilter, completedJobRatingFilter, completedJobMediaFilter, completedJobSort]);
   const jobGroups = useMemo(() => ([
-    { key: 'running', label: '處理中', jobs: jobs.filter((job) => job.status === 'running') },
-    { key: 'queued', label: '隊列中', jobs: jobs.filter((job) => job.status === 'queued') },
-    { key: 'complete', label: '已完成', jobs: jobs.filter((job) => job.status === 'complete') },
-    { key: 'failed', label: '失敗', jobs: jobs.filter((job) => job.status === 'failed') },
-  ]), [jobs]);
+    { key: 'running', label: '處理中', jobs: jobs.filter((job) => job.status === 'running').sort(newestFirst) },
+    { key: 'queued', label: '隊列中', jobs: jobs.filter((job) => job.status === 'queued').sort(newestFirst), collapsed: !showQueuedJobs },
+    { key: 'complete', label: '已完成', jobs: completedJobs },
+    { key: 'failed', label: '失敗', jobs: jobs.filter((job) => job.status === 'failed' && jobMatchesSearch(job, jobSearch)).sort(newestFirst) },
+  ]), [jobs, completedJobs, jobSearch, showQueuedJobs]);
+  const normalizedWordQuery = wordQuery.trim().replace(/\s+/g, '').toLowerCase();
+  const wordHasExactMatch = !!normalizedWordQuery && words.some((word) => (
+    word.source.trim().replace(/\s+/g, '').toLowerCase() === normalizedWordQuery
+  ));
+  const visibleWords = useMemo(() => {
+    const filtered = words.filter((word) => {
+      if (wordKindFilter !== 'all' && (word.kind || 'word') !== wordKindFilter) return false;
+      if (wordRatingFilter === 'rated' && !(word.rating_count && word.rating_count > 0)) return false;
+      if (wordRatingFilter === 'unrated' && (word.rating_count && word.rating_count > 0)) return false;
+      if (wordMediaFilter === 'audio' && !(word.has_audio || (word.assets ?? []).some((asset) => asset.has_audio))) return false;
+      if (wordMediaFilter === 'video' && !(word.has_video || (word.assets ?? []).some((asset) => asset.has_video))) return false;
+      if (wordMediaFilter === 'missing_audio' && (word.has_audio || (word.assets ?? []).some((asset) => asset.has_audio))) return false;
+      if (wordStatusFilter === 'problem' && !word.problem) return false;
+      if (wordStatusFilter === 'ok' && word.problem) return false;
+      if (wordStatusFilter === 'generating' && !['queued', 'running'].includes(word.generation_status || '')) return false;
+      if (wordStatusFilter === 'requested' && word.status !== 'requested') return false;
+      return true;
+    });
+    return [...filtered].sort((a, b) => {
+      if (wordSort === 'newest') return newestWordFirst(a, b);
+      if (wordSort === 'plays') return (b.play_count || 0) - (a.play_count || 0) || highestRatedWordFirst(a, b);
+      if (wordSort === 'usage') return (b.count || 0) - (a.count || 0) || highestRatedWordFirst(a, b);
+      if (wordSort === 'source') return a.source.localeCompare(b.source, 'zh-Hant') || highestRatedWordFirst(a, b);
+      return highestRatedWordFirst(a, b);
+    });
+  }, [words, wordKindFilter, wordRatingFilter, wordMediaFilter, wordStatusFilter, wordSort]);
   const publicWaitSeconds = queueStatus?.rate_limit.next_available_at
-    ? Math.max(0, Math.ceil(queueStatus.rate_limit.next_available_at - nowSeconds))
+    ? Math.max(0, queueStatus.rate_limit.next_available_at - nowSeconds)
     : 0;
+  const publicCanSubmit = publicWaitSeconds <= 1;
   const visibleSegments = selectedJob?.id === segmentJobId ? segments : [];
   const selectedMedia = useMemo(() => new URLSearchParams(window.location.search).get('media') ?? '', []);
   const jobMediaSrc = (job: Job, kind: 'audio' | 'video' | 'zip' | 'taigi' | 'tailo' | 'segments') => (
@@ -1554,6 +1947,22 @@ function App() {
     || (asset.id === 'legacy' ? word.static_media?.[kind] : undefined)
     || `/words/${word.id}/assets/${asset.id}/download/${kind}`
   );
+  const primaryWordAsset = (word: WordEntry) => (
+    (word.assets ?? []).find((asset) => asset.has_audio) ?? (word.assets ?? [])[0] ?? null
+  );
+  const playWordAudio = (word: WordEntry) => {
+    const asset = primaryWordAsset(word);
+    if (!asset?.has_audio) {
+      message.info('這個詞語還沒有語音');
+      return;
+    }
+    const url = wordAssetMediaSrc(word, asset, 'audio');
+    const audio = new Audio(url);
+    audio.play().catch(() => window.open(url, '_blank', 'noopener,noreferrer'));
+  };
+  const toggleWordDetails = (wordId: string) => {
+    setExpandedWordIds((current) => ({ ...current, [wordId]: !current[wordId] }));
+  };
   const versionedUrl = (url: string, version?: number) => (
     version ? `${url}${url.includes('?') ? '&' : '?'}v=${Math.floor(version)}` : url
   );
@@ -1616,7 +2025,7 @@ function App() {
   const loadWords = async (query = wordQueryRef.current) => {
     wordQueryRef.current = query;
     try {
-      const res = await axios.get<{ words: WordEntry[]; total: number }>('/words', { params: { q: query, limit: 30 } });
+      const res = await axios.get<{ words: WordEntry[]; total: number }>('/words', { params: { q: query, limit: 200 } });
       setReadOnlyMode(false);
       setWords(res.data.words);
     } catch {
@@ -1632,7 +2041,7 @@ function App() {
         ))
         : (snapshot.words ?? []);
       setReadOnlyMode(true);
-      setWords(filtered.slice(0, 30));
+      setWords(filtered.slice(0, 200));
     }
   };
 
@@ -1697,6 +2106,15 @@ function App() {
     }
   };
 
+  const changeDateTimeFormat = (nextFormat: DateTimeFormatPreference) => {
+    setDateTimeFormat(nextFormat);
+    try {
+      window.localStorage.setItem('taigi_web_date_time_format', nextFormat);
+    } catch {
+      // Ignore storage failures; the current session still uses the selected format.
+    }
+  };
+
   const loadSegments = async (jobId: string) => {
     const res = await axios.get<{ segments: Segment[] }>(`/jobs/${jobId}/segments`);
     const nextSegments = res.data.segments;
@@ -1707,15 +2125,36 @@ function App() {
         note: segment.my_note ?? '',
         corrected_taigi_text: inlineText(segment.corrected_taigi_text ?? segment.taigi_text),
         corrected_tailo_text: inlineText(segment.corrected_tailo_text ?? segment.tailo_text),
-        corrections: [{ source_phrase: '', taigi_correction: '', tailo_correction: '', note: '' }],
+        corrections: [
+          ...(segment.source_tokens ?? [])
+            .filter((token) => token.review_status)
+            .map((token) => ({
+              source_phrase: token.source,
+              taigi_correction: token.taigi,
+              tailo_correction: token.tailo,
+              note: token.review_status === 'problem' ? '詞彙需要檢查' : '詞彙已確認沒問題',
+              status: token.review_status,
+            })),
+          { source_phrase: '', taigi_correction: '', tailo_correction: '', note: '', status: '' },
+        ],
       };
     }
     setSegments(nextSegments);
     setFeedbackDrafts(nextDrafts);
+    setSelectedSegmentTokens({});
     setSegmentJobId(jobId);
   };
 
   useEffect(() => {
+    if (!window.sessionStorage.getItem('taigi_page_visit_recorded')) {
+      window.sessionStorage.setItem('taigi_page_visit_recorded', '1');
+      axios.post('/stats/action', {
+        action: 'page_visit',
+        target_type: 'page',
+        target_id: window.location.pathname || '/',
+        metadata: { referrer: document.referrer || '', path: window.location.pathname || '/' },
+      }).catch(() => undefined);
+    }
     const params = new URLSearchParams(window.location.search);
     const loginToken = params.get('token');
     if (loginToken) {
@@ -1768,15 +2207,18 @@ function App() {
     if (!selectedJob || selectedJob.status !== 'complete') {
       setSegments([]);
       setFeedbackDrafts({});
+      setSelectedSegmentTokens({});
       setSegmentJobId(null);
       return;
     }
     setSegments([]);
     setFeedbackDrafts({});
+    setSelectedSegmentTokens({});
     setSegmentJobId(null);
     loadSegments(selectedJob.id).catch(() => {
       setSegments([]);
       setFeedbackDrafts({});
+      setSelectedSegmentTokens({});
       setSegmentJobId(null);
     });
   }, [selectedJob?.id, selectedJob?.status]);
@@ -1981,6 +2423,29 @@ function App() {
     });
   };
 
+  const retryJob = async (job: Job) => {
+    setRetryingJobs((current) => ({ ...current, [job.id]: true }));
+    setJobError(null);
+    try {
+      const res = await axios.post<Job>(`/jobs/${job.id}/retry`, { mode: 'restart' }, { timeout: 60000 });
+      setJobs((current) => current.map((item) => (item.id === res.data.id ? { ...item, ...res.data } : item)));
+      setSelectedJobId(res.data.id);
+      await loadJobs().catch(() => undefined);
+      await loadQueueStatus().catch(() => undefined);
+      await loadStats().catch(() => undefined);
+      message.success(`${jobDisplayTitle(job)} 已重新排入佇列`);
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      const reason = detail && typeof detail === 'object'
+        ? detail.message || '重新執行失敗。'
+        : detail || '重新執行失敗。';
+      setJobError(String(reason));
+      message.error(String(reason));
+    } finally {
+      setRetryingJobs((current) => ({ ...current, [job.id]: false }));
+    }
+  };
+
   const selectedText = () => window.getSelection()?.toString().trim() ?? '';
 
   const updateFeedback = (segmentIndex: number, patch: Partial<SegmentReviewPayload>) => {
@@ -1992,7 +2457,7 @@ function App() {
           note: '',
           corrected_taigi_text: '',
           corrected_tailo_text: '',
-          corrections: [{ source_phrase: '', taigi_correction: '', tailo_correction: '', note: '' }],
+          corrections: [{ source_phrase: '', taigi_correction: '', tailo_correction: '', note: '', status: '' }],
         }),
         ...patch,
       },
@@ -2002,7 +2467,7 @@ function App() {
   const updateCorrection = (
     segmentIndex: number,
     correctionIndex: number,
-    field: 'source_phrase' | 'taigi_correction' | 'tailo_correction' | 'note',
+    field: 'source_phrase' | 'taigi_correction' | 'tailo_correction' | 'note' | 'status',
     value: string,
   ) => {
     const draft = feedbackDrafts[segmentIndex];
@@ -2017,44 +2482,288 @@ function App() {
     const draft = feedbackDrafts[segmentIndex];
     if (!draft) return;
     updateFeedback(segmentIndex, {
-      corrections: [...draft.corrections, { source_phrase: '', taigi_correction: '', tailo_correction: '', note: '' }],
+      corrections: [...draft.corrections, { source_phrase: '', taigi_correction: '', tailo_correction: '', note: '', status: '' }],
     });
+  };
+
+  const segmentTokenKey = (token: SegmentToken) => `${token.source}\u0000${token.taigi}\u0000${token.tailo}`;
+
+  const correctionHasContent = (correction: SegmentReviewPayload['corrections'][number]) => (
+    correction.source_phrase.trim()
+    || correction.taigi_correction.trim()
+    || correction.tailo_correction.trim()
+    || correction.note.trim()
+    || correction.status
+  );
+
+  const draftHasFeedback = (draft: SegmentReviewPayload) => (
+    draft.rating > 0
+    || draft.note.trim()
+    || draft.corrected_taigi_text.trim()
+    || draft.corrected_tailo_text.trim()
+    || draft.corrections.some(correctionHasContent)
+  );
+
+  const segmentTokenStatus = (segment: Segment, token: SegmentToken) => {
+    const draft = feedbackDrafts[segment.index];
+    const correction = draft?.corrections.find((item) => item.source_phrase === token.source && item.status);
+    return correction?.status || token.review_status || '';
+  };
+
+  const segmentSelectedTokens = (segment: Segment) => {
+    const selected = new Set(selectedSegmentTokens[segment.index] ?? []);
+    const seen = new Set<string>();
+    return (segment.source_tokens ?? []).filter((token) => {
+      const key = segmentTokenKey(token);
+      if (!selected.has(key) || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+
+  const toggleSegmentToken = (segment: Segment, token: SegmentToken) => {
+    const key = segmentTokenKey(token);
+    setSelectedSegmentTokens((current) => {
+      const selected = new Set(current[segment.index] ?? []);
+      if (selected.has(key)) {
+        selected.delete(key);
+      } else {
+        selected.add(key);
+      }
+      return { ...current, [segment.index]: Array.from(selected) };
+    });
+  };
+
+  const clearSegmentTokenSelection = (segmentIndex: number) => {
+    setSelectedSegmentTokens((current) => ({ ...current, [segmentIndex]: [] }));
+  };
+
+  const wordTokenStatus = (token: SegmentToken) => token.review_status || '';
+
+  const wordSelectedTokens = (word: WordEntry) => {
+    const selected = new Set(selectedWordTokens[word.id] ?? []);
+    const seen = new Set<string>();
+    return (word.source_tokens ?? []).filter((token) => {
+      const key = segmentTokenKey(token);
+      if (!selected.has(key) || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+
+  const toggleWordToken = (word: WordEntry, token: SegmentToken) => {
+    const key = segmentTokenKey(token);
+    setSelectedWordTokens((current) => {
+      const selected = new Set(current[word.id] ?? []);
+      if (selected.has(key)) {
+        selected.delete(key);
+      } else {
+        selected.add(key);
+      }
+      return { ...current, [word.id]: Array.from(selected) };
+    });
+  };
+
+  const clearWordTokenSelection = (wordId: string) => {
+    setSelectedWordTokens((current) => ({ ...current, [wordId]: [] }));
+  };
+
+  const markWordTokens = async (word: WordEntry, status: 'problem' | 'ok') => {
+    const tokens = wordSelectedTokens(word);
+    if (tokens.length === 0) {
+      message.warning('請先選取要標示的詞彙');
+      return;
+    }
+    try {
+      await axios.post(`/words/${word.id}/token-reviews`, {
+        tokens: tokens.map((token) => ({ source: token.source, status })),
+      });
+      await loadWords(wordQueryRef.current);
+      clearWordTokenSelection(word.id);
+      message.success(`已把 ${tokens.length} 個詞標示為${status === 'problem' ? '有問題' : '沒問題'}`);
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      message.error((detail && typeof detail === 'object' ? detail.message : detail) || '無法儲存斷詞標示');
+    }
+  };
+
+  const markSegmentTokens = (segment: Segment, tokens: SegmentToken[], status: 'problem' | 'ok') => {
+    const draft = feedbackDrafts[segment.index];
+    if (!draft) return;
+    if (tokens.length === 0) {
+      message.warning('請先選取要標示的詞彙');
+      return;
+    }
+    const corrections = draft.corrections.filter(correctionHasContent);
+    for (const token of tokens) {
+      const existingIndex = corrections.findIndex((correction) => correction.source_phrase === token.source);
+      const note = status === 'problem' ? '詞彙需要檢查' : '詞彙已確認沒問題';
+      if (existingIndex >= 0) {
+        corrections[existingIndex] = {
+          ...corrections[existingIndex],
+          taigi_correction: token.taigi || corrections[existingIndex].taigi_correction,
+          tailo_correction: token.tailo || corrections[existingIndex].tailo_correction,
+          note: corrections[existingIndex].note || note,
+          status,
+        };
+      } else {
+        corrections.push({
+          source_phrase: token.source,
+          taigi_correction: token.taigi || '',
+          tailo_correction: token.tailo || '',
+          note,
+          status,
+        });
+      }
+    }
+    updateFeedback(segment.index, { corrections });
+    message.success(`已把 ${tokens.length} 個詞標示為${status === 'problem' ? '有問題' : '沒問題'}`);
+  };
+
+  const openTokenInLexicon = async (token: SegmentToken) => {
+    setLexiconQuery(token.source);
+    changeActiveTab('lexicon');
+    await loadWords(token.source).catch(() => undefined);
+  };
+
+  const createTokenWord = async (token: SegmentToken): Promise<WordEntry | null> => {
+    try {
+      const res = await axios.post<{ saved: boolean; word: WordEntry }>('/words/candidates', {
+        source: token.source,
+        taigi: token.taigi,
+        tailo: token.tailo,
+        note: '從分段斷詞標示加入詞庫',
+      });
+      await loadWords(token.source);
+      await loadStats().catch(() => undefined);
+      message.success(`已把「${token.source}」加入詞庫`);
+      return res.data.word;
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      message.error((detail && typeof detail === 'object' ? detail.message : detail) || '無法加入詞庫');
+      return null;
+    }
+  };
+
+  const reportTokenWordIssue = async (token: SegmentToken) => {
+    const wordId = token.word_id || (await createTokenWord(token))?.id;
+    if (!wordId) return;
+    try {
+      await axios.post(`/words/${wordId}/issue`, { reason: `分段修正標示「${token.source}」有問題，需要檢查或重新產生。` });
+      await loadWords(wordQueryRef.current).catch(() => undefined);
+      message.success(`已標記「${token.source}」為問題詞彙`);
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      message.error((detail && typeof detail === 'object' ? detail.message : detail) || '無法標記詞彙問題');
+    }
+  };
+
+  const generateTokenWordAudio = async (token: SegmentToken) => {
+    const wordId = token.word_id || (await createTokenWord(token))?.id;
+    if (!wordId) return;
+    try {
+      await axios.post(`/words/${wordId}/generate`, {}, { timeout: 30000 });
+      await loadWords(wordQueryRef.current).catch(() => undefined);
+      await loadJobs().catch(() => undefined);
+      await loadStats().catch(() => undefined);
+      message.success(`已把「${token.source}」的單詞語音排入佇列`);
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      message.error((detail && typeof detail === 'object' ? detail.message : detail) || '無法產生單詞語音');
+    }
+  };
+
+  const markSelectedSegmentTokens = (segment: Segment, status: 'problem' | 'ok') => {
+    markSegmentTokens(segment, segmentSelectedTokens(segment), status);
+  };
+
+  const reportSelectedSegmentTokens = async (segment: Segment) => {
+    const tokens = segmentSelectedTokens(segment);
+    if (tokens.length === 0) {
+      message.warning('請先選取要標示的詞彙');
+      return;
+    }
+    for (const token of tokens) {
+      await reportTokenWordIssue(token);
+    }
+    if (segmentJobId) {
+      await loadSegments(segmentJobId).catch(() => undefined);
+    }
+  };
+
+  const generateSelectedTokenAudio = async (segment: Segment) => {
+    const tokens = segmentSelectedTokens(segment);
+    if (tokens.length === 0) {
+      message.warning('請先選取要產生語音的詞彙');
+      return;
+    }
+    for (const token of tokens) {
+      await generateTokenWordAudio(token);
+    }
+    if (segmentJobId) {
+      await loadSegments(segmentJobId).catch(() => undefined);
+    }
   };
 
   const submitFeedback = async (segment: Segment) => {
     const draft = feedbackDrafts[segment.index];
-    if (!selectedJob || !draft || draft.rating < 1) {
-      message.warning('請先替這段評分');
+    if (!selectedJob || !draft || !draftHasFeedback(draft)) {
+      message.warning('請先評分、修正文字，或標示詞彙狀態');
       return;
     }
     try {
       await axios.post(`/jobs/${selectedJob.id}/segments/${segment.index}/feedback`, {
         ...draft,
-        corrections: draft.corrections.filter((correction) => (
-          correction.source_phrase.trim()
-          || correction.taigi_correction.trim()
-          || correction.tailo_correction.trim()
-          || correction.note.trim()
-        )),
+        corrections: draft.corrections.filter(correctionHasContent),
       });
       await loadSegments(selectedJob.id);
       await loadWords().catch(() => undefined);
       await loadStats().catch(() => undefined);
-      message.success('已儲存評分與修正，下一次翻譯會納入參考');
+      message.success('已儲存這段回饋與詞彙標示');
     } catch (error) {
       const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
       message.error(detail || '儲存失敗');
     }
   };
 
+  const saveSegmentRating = async (segment: Segment, rating: number) => {
+    updateFeedback(segment.index, { rating });
+    if (!selectedJob || rating < 1) return;
+    const draft = feedbackDrafts[segment.index];
+    const body = segmentFeedbackBody({
+      rating,
+      note: draft?.note ?? '',
+      corrected_taigi_text: draft?.corrected_taigi_text ?? inlineText(segment.corrected_taigi_text ?? segment.taigi_text),
+      corrected_tailo_text: draft?.corrected_tailo_text ?? inlineText(segment.corrected_tailo_text ?? segment.tailo_text),
+      corrections: draft?.corrections ?? [{ source_phrase: '', taigi_correction: '', tailo_correction: '', note: '', status: '' }],
+    });
+    try {
+      const res = await axios.post<{ saved: boolean; stats: { my_rating?: number | null; average_rating?: number | null; rating_count?: number } }>(
+        `/jobs/${selectedJob.id}/segments/${segment.index}/feedback`,
+        body,
+      );
+      setSegments((current) => current.map((item) => (
+        item.index === segment.index
+          ? {
+              ...item,
+              rating,
+              my_rating: res.data.stats.my_rating ?? rating,
+              average_rating: res.data.stats.average_rating ?? item.average_rating,
+              rating_count: res.data.stats.rating_count ?? item.rating_count,
+              feedback_count: res.data.stats.rating_count ?? item.feedback_count,
+            }
+          : item
+      )));
+      message.success('已儲存這段正確度評分');
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      message.error(detail || '正確度評分儲存失敗');
+    }
+  };
+
   const segmentFeedbackBody = (draft: SegmentReviewPayload) => ({
     ...draft,
-    corrections: draft.corrections.filter((correction) => (
-      correction.source_phrase.trim()
-      || correction.taigi_correction.trim()
-      || correction.tailo_correction.trim()
-      || correction.note.trim()
-    )),
+    corrections: draft.corrections.filter(correctionHasContent),
   });
 
   const regenerateSegment = async (segment: Segment) => {
@@ -2065,34 +2774,29 @@ function App() {
     }
     setRegeneratingSegments((current) => ({ ...current, [segment.index]: true }));
     setJobError(null);
-    const messageKey = `regenerate-segment-${selectedJob.id}-${segment.index}`;
-    message.loading({
-      key: messageKey,
-      content: `Segment ${segment.index} 正在重新產生語音，完成後會重建完整語音與影片`,
-      duration: 0,
-    });
+    const sourceJobId = selectedJob.id;
     try {
-      const res = await axios.post<{ regenerated: boolean; job: Job; segment: Segment }>(
-        `/jobs/${selectedJob.id}/segments/${segment.index}/regenerate`,
+      const res = await axios.post<{ queued: boolean; job: Job; source_job: Job; segment_index: number }>(
+        `/jobs/${sourceJobId}/segments/${segment.index}/regenerate`,
         segmentFeedbackBody(draft),
-        { timeout: 600000 },
+        { timeout: 60000 },
       );
-      setJobs((current) => current.map((job) => (job.id === res.data.job.id ? { ...job, ...res.data.job } : job)));
-      await loadSegments(selectedJob.id);
+      setJobs((current) => {
+        const patched = current.map((job) => (job.id === res.data.source_job.id ? { ...job, ...res.data.source_job } : job));
+        return patched.some((job) => job.id === res.data.job.id) ? patched : [res.data.job, ...patched];
+      });
+      setSelectedJobId(res.data.job.id);
       await loadJobs().catch(() => undefined);
       await loadWords().catch(() => undefined);
       await loadStats().catch(() => undefined);
-      message.success({
-        key: messageKey,
-        content: `Segment ${segment.index} 已重新產生語音，完整語音與影片已更新`,
-      });
+      message.success(`Segment ${segment.index} 已加入重生佇列，可在工作列表查看進度`);
     } catch (error) {
       const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
       const reason = detail && typeof detail === 'object'
         ? detail.message || '重新產生分段失敗。'
         : detail || '重新產生分段失敗。';
       setJobError(String(reason));
-      message.error({ key: messageKey, content: String(reason) });
+      message.error(String(reason));
     } finally {
       setRegeneratingSegments((current) => ({ ...current, [segment.index]: false }));
     }
@@ -2102,33 +2806,28 @@ function App() {
     if (!selectedJob) return;
     setRegeneratingReviewed(true);
     setJobError(null);
-    const messageKey = `regenerate-reviewed-${selectedJob.id}`;
-    message.loading({
-      key: messageKey,
-      content: '正在重新產生所有已儲存回饋的分段，完成後會重建完整語音與影片',
-      duration: 0,
-    });
+    const sourceJobId = selectedJob.id;
     try {
-      const res = await axios.post<{ regenerated: boolean; segment_count: number; job: Job }>(
-        `/jobs/${selectedJob.id}/segments/regenerate-reviewed`,
+      const res = await axios.post<{ queued: boolean; segment_count: number; job: Job; source_job: Job }>(
+        `/jobs/${sourceJobId}/segments/regenerate-reviewed`,
         {},
-        { timeout: 1200000 },
+        { timeout: 60000 },
       );
-      setJobs((current) => current.map((job) => (job.id === res.data.job.id ? { ...job, ...res.data.job } : job)));
-      await loadSegments(selectedJob.id);
+      setJobs((current) => {
+        const patched = current.map((job) => (job.id === res.data.source_job.id ? { ...job, ...res.data.source_job } : job));
+        return patched.some((job) => job.id === res.data.job.id) ? patched : [res.data.job, ...patched];
+      });
+      setSelectedJobId(res.data.job.id);
       await loadJobs().catch(() => undefined);
       await loadStats().catch(() => undefined);
-      message.success({
-        key: messageKey,
-        content: `已重新產生 ${res.data.segment_count} 個有回饋的分段，並重建完整語音與影片`,
-      });
+      message.success(`已把 ${res.data.segment_count} 個有回饋的分段加入重生佇列`);
     } catch (error) {
       const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
       const reason = detail && typeof detail === 'object'
         ? detail.message || '重新產生已回饋分段失敗。'
         : detail || '重新產生已回饋分段失敗。';
       setJobError(String(reason));
-      message.error({ key: messageKey, content: String(reason) });
+      message.error(String(reason));
     } finally {
       setRegeneratingReviewed(false);
     }
@@ -2233,6 +2932,11 @@ function App() {
     }
   };
 
+  const openWordAssetVideo = (word: WordEntry, asset: WordAsset) => {
+    const url = wordAssetMediaSrc(word, asset, 'video');
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
   const requestWordCorpus = async (word: WordEntry) => {
     try {
       await axios.post(`/words/${word.id}/translations`, {
@@ -2293,17 +2997,13 @@ function App() {
       message.warning('請先輸入想增加的詞條');
       return;
     }
-    if (!auth?.email) {
-      message.warning('這項申請需要先用 email 登入');
-      return;
-    }
     try {
       const res = await axios.post('/words/requests', {
         source,
         note: sourceRequestNote.trim() || '使用者在 Sources 頁面申請增加多語系資料詞條。',
       });
       const wordId = res.data.word?.id;
-      if (wordId) {
+      if (wordId && auth?.email) {
         await axios.post(`/words/${wordId}/translations`, {
           languages: UI_LANGUAGES.map((item) => item.value),
           overwrite: false,
@@ -2313,7 +3013,7 @@ function App() {
       setSourceRequestNote('');
       await loadWords();
       await loadStats().catch(() => undefined);
-      message.success('已送出詞條與多語系語料申請');
+      message.success(auth?.email ? '已送出詞條與多語系語料申請' : '已匿名送出詞條申請');
     } catch (error) {
       const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
       message.error((detail && typeof detail === 'object' ? detail.message : detail) || '無法送出詞條申請');
@@ -2346,7 +3046,7 @@ function App() {
           <div className="top-brand">
             <AudioOutlined className="top-brand-icon" />
             <div>
-              <Title level={4} className="top-brand-title">Taigi Voice Video Web</Title>
+              <Title level={4} className="top-brand-title">{t('siteName')}</Title>
               <Text type="secondary" className="top-brand-subtitle">{t('subtitle')}</Text>
             </div>
           </div>
@@ -2357,6 +3057,7 @@ function App() {
               { key: 'lexicon', label: t('lexicon') },
               { key: 'stats', label: t('stats') },
               { key: 'sources', label: t('sources') },
+              { key: 'about', label: t('about') },
             ].map((item) => (
               <button
                 key={item.key}
@@ -2375,6 +3076,19 @@ function App() {
               options={UI_LANGUAGES}
               onChange={changeUiLanguage}
               className="language-select"
+            />
+            <Select<DateTimeFormatPreference>
+              size="small"
+              aria-label={t('dateTimeFormat')}
+              value={dateTimeFormat}
+              onChange={changeDateTimeFormat}
+              className="time-format-select"
+              options={[
+                { value: 'system', label: t('dateSystem') },
+                { value: 'taiwan', label: t('dateTaiwan') },
+                { value: 'us', label: t('dateUs') },
+                { value: 'iso', label: t('dateIso') },
+              ]}
             />
             {signedIn ? (
               <>
@@ -2405,7 +3119,7 @@ function App() {
 
         <Content className="app-content">
             <div className={`app-grid ${
-              activeTab === 'lexicon' ? 'show-lexicon' : activeTab === 'jobs' ? 'show-jobs' : activeTab === 'stats' ? 'show-stats' : activeTab === 'sources' ? 'show-sources' : 'show-work'
+              activeTab === 'lexicon' ? 'show-lexicon' : activeTab === 'jobs' ? 'show-jobs' : activeTab === 'stats' ? 'show-stats' : activeTab === 'sources' ? 'show-sources' : activeTab === 'about' ? 'show-about' : 'show-work'
             }`}>
               <Space direction="vertical" size={16} style={{ width: '100%' }}>
                 {readOnlyMode && (
@@ -2432,23 +3146,27 @@ function App() {
                   />
                   {!signedIn && queueStatus && (
                     <Alert
-                      type={publicWaitSeconds > 0 ? 'warning' : 'info'}
+                      type={publicCanSubmit ? 'info' : 'warning'}
                       showIcon
                       className="queue-status"
                       message={queueStatus.private_client
                         ? '內網使用者目前可以優先送出'
-                        : publicWaitSeconds > 0
-                        ? `未登入使用者還要等待 ${formatWait(publicWaitSeconds)} 才能再次生成`
+                        : !publicCanSubmit
+                        ? (
+                          <>
+                            未登入使用者還要等待 <span className="stable-number">{formatStableWait(publicWaitSeconds)}</span> 才能再次生成
+                          </>
+                        )
                         : '未登入使用者目前可以送出一句'}
                       description={
                         <Space direction="vertical" size={2}>
                           <Text>
-                            目前 {queueStatus.queue.running_count} 個工作執行中，{queueStatus.queue.queued_count} 個工作正在排隊。
+                            目前 <span className="stable-number">{queueStatus.queue.running_count}</span> 個工作執行中，<span className="stable-number">{queueStatus.queue.queued_count}</span> 個工作正在排隊。
                           </Text>
                           <Text type="secondary">
                             {queueStatus.private_client
-                              ? `內網送出的工作會優先處理；現在送出會排在第 ${queueStatus.queue.next_position} 個。`
-                              : `現在送出會排在第 ${queueStatus.queue.next_position} 個；未登入使用者每次限一句，間隔 ${formatWait(queueStatus.rate_limit.limit_seconds)}。`}
+                              ? <>內網送出的工作會優先處理；現在送出會排在第 <span className="stable-number">{queueStatus.queue.next_position}</span> 個。</>
+                              : <>現在送出會排在第 <span className="stable-number">{queueStatus.queue.next_position}</span> 個；未登入使用者每次限一句，間隔 <span className="stable-number">{formatWait(queueStatus.rate_limit.limit_seconds)}</span>。</>}
                           </Text>
                         </Space>
                       }
@@ -2591,9 +3309,7 @@ function App() {
                         <Text strong>{jobDisplayTitle(selectedJob)}</Text>
                         <br />
                         <Text type="secondary">
-                          {selectedJob.segment_count || 0} 段 · Created {formatTime(selectedJob.created_at)}
-                          {formatDuration(selectedJob.elapsed_seconds) ? ` · 耗時 ${formatDuration(selectedJob.elapsed_seconds)}` : ''}
-                          {selectedJob.rating_count ? ` · 平均 ${selectedJob.rating_average?.toFixed(1)} / 5（${selectedJob.rating_count} 票）` : ''}
+                          {formatJobMeta(selectedJob)}
                         </Text>
                       </div>
                       {selectedJob.status === 'complete' && (
@@ -2605,7 +3321,7 @@ function App() {
                                 <>
                                   <br />
                                   <Text type="secondary">
-                                    平均 {selectedJob.rating_average?.toFixed(1)} / 5（{selectedJob.rating_count} 票）
+                                    {formatRatingText(selectedJob.rating_average, selectedJob.rating_count)}
                                   </Text>
                                 </>
                               )}
@@ -2688,6 +3404,7 @@ function App() {
                             <Space direction="vertical" size={12} style={{ width: '100%' }}>
                               {visibleSegments.map((segment) => {
                                 const draft = feedbackDrafts[segment.index];
+                                const selectedTokenCount = segmentSelectedTokens(segment).length;
                                 return (
                                   <div key={segment.index} className="segment-card">
                                     <Flex align="center" justify="space-between" gap={12} wrap>
@@ -2696,7 +3413,7 @@ function App() {
                                         {segment.duration && <Text type="secondary">{segment.duration.toFixed(2)}s</Text>}
                                         {!!segment.rating_count && (
                                           <Tag color="success">
-                                            平均 {segment.average_rating?.toFixed(1)} / 5 · {segment.rating_count} 票
+                                            {formatRatingText(segment.average_rating, segment.rating_count)}
                                           </Tag>
                                         )}
                                         {!!segment.my_rating && <Tag color="gold">我的評分 {segment.my_rating}</Tag>}
@@ -2721,6 +3438,58 @@ function App() {
                                         <Text strong>原本中文</Text>
                                         <Input.TextArea value={segment.source_text} autoSize readOnly className="textarea-mono compact-textarea" />
                                       </div>
+                                      {(segment.source_tokens ?? []).length > 0 && (
+                                        <div className="segment-token-panel">
+                                          <Flex align="center" justify="space-between" gap={8} wrap>
+                                            <Space size={8} wrap>
+                                              <Text strong>斷詞</Text>
+                                              <Tag>{segment.source_tokens?.length ?? 0} 詞</Tag>
+                                              {selectedTokenCount > 0 && <Tag color="processing">已選 {selectedTokenCount}</Tag>}
+                                            </Space>
+                                            <Space size={6} wrap>
+                                              <Button size="small" danger onClick={() => markSelectedSegmentTokens(segment, 'problem')}>
+                                                標示有問題
+                                              </Button>
+                                              <Button size="small" onClick={() => markSelectedSegmentTokens(segment, 'ok')}>
+                                                標示沒問題
+                                              </Button>
+                                              <Button size="small" type="primary" onClick={() => submitFeedback(segment)}>
+                                                批次儲存紀錄
+                                              </Button>
+                                              <Button size="small" onClick={() => reportSelectedSegmentTokens(segment)}>
+                                                標記詞庫問題
+                                              </Button>
+                                              <Button size="small" icon={<AudioOutlined />} onClick={() => generateSelectedTokenAudio(segment)}>
+                                                產生單詞語音
+                                              </Button>
+                                              <Button size="small" disabled={selectedTokenCount === 0} onClick={() => clearSegmentTokenSelection(segment.index)}>
+                                                清除選取
+                                              </Button>
+                                            </Space>
+                                          </Flex>
+                                          <div className="segment-token-list">
+                                            {(segment.source_tokens ?? []).map((token, tokenIndex) => (
+                                              <button
+                                                type="button"
+                                                key={`${segment.index}-${token.source}-${tokenIndex}`}
+                                                className={[
+                                                  'segment-token',
+                                                  token.problem ? 'has-problem' : '',
+                                                  segmentTokenStatus(segment, token) === 'problem' ? 'is-reviewed-problem' : '',
+                                                  segmentTokenStatus(segment, token) === 'ok' ? 'is-reviewed-ok' : '',
+                                                  selectedSegmentTokens[segment.index]?.includes(segmentTokenKey(token)) ? 'is-selected' : '',
+                                                ].filter(Boolean).join(' ')}
+                                                onClick={() => toggleSegmentToken(segment, token)}
+                                              >
+                                                <span>{token.source}</span>
+                                                {segmentTokenStatus(segment, token) === 'problem' && <small>有問題</small>}
+                                                {segmentTokenStatus(segment, token) === 'ok' && <small>沒問題</small>}
+                                                {!segmentTokenStatus(segment, token) && token.exists && <small>{token.problem ? '問題' : token.has_audio ? '有音檔' : '詞庫'}</small>}
+                                              </button>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      )}
                                       <div>
                                         <Text strong>台語文字</Text>
                                         <Input.TextArea value={inlineText(segment.taigi_text)} autoSize readOnly className="textarea-mono compact-textarea" />
@@ -2736,7 +3505,7 @@ function App() {
                                           <Text strong>正確度評分</Text>
                                           <Rate
                                             value={draft.rating}
-                                            onChange={(rating) => updateFeedback(segment.index, { rating })}
+                                            onChange={(rating) => saveSegmentRating(segment, rating)}
                                           />
                                           <Text type="secondary">可選取上方文字，再按下「帶入選取詞」</Text>
                                         </Flex>
@@ -2783,6 +3552,15 @@ function App() {
                                               onChange={(event) => updateCorrection(segment.index, correctionIndex, 'tailo_correction', event.target.value)}
                                               placeholder="台羅修正"
                                             />
+                                            <Select
+                                              value={correction.status || ''}
+                                              onChange={(value) => updateCorrection(segment.index, correctionIndex, 'status', value)}
+                                              options={[
+                                                { value: '', label: '未標示' },
+                                                { value: 'problem', label: '有問題' },
+                                                { value: 'ok', label: '沒問題' },
+                                              ]}
+                                            />
                                             <Button onClick={() => updateCorrection(segment.index, correctionIndex, 'source_phrase', selectedText())}>
                                               帶入選取詞
                                             </Button>
@@ -2810,10 +3588,22 @@ function App() {
                           )}
                         </>
                       )}
-                      {isAdmin && selectedJob.status === 'failed' && (
-                        <Button danger icon={<DeleteOutlined />} onClick={() => deleteJob(selectedJob)}>
-                          刪除失敗工作
-                        </Button>
+                      {selectedJob.status === 'failed' && (
+                        <Space size={8} wrap>
+                          <Button
+                            type="primary"
+                            icon={<ReloadOutlined />}
+                            loading={!!retryingJobs[selectedJob.id]}
+                            onClick={() => retryJob(selectedJob)}
+                          >
+                            重新執行
+                          </Button>
+                          {isAdmin && (
+                            <Button danger icon={<DeleteOutlined />} onClick={() => deleteJob(selectedJob)}>
+                              刪除失敗工作
+                            </Button>
+                          )}
+                        </Space>
                       )}
                     </Space>
                   )}
@@ -2920,6 +3710,42 @@ function App() {
                           ghost
                           className="advanced-settings"
                           items={[
+                            {
+                              key: 'translator',
+                              label: '台語翻譯後端',
+                              children: (
+                                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                                  <Paragraph type="secondary" style={{ margin: 0 }}>
+                                    預設使用內建規則翻譯。若啟用 TW-Hokkien-LLM，請提供 OpenAI-compatible Completions API，例如本機 llama.cpp server 的 /v1。
+                                  </Paragraph>
+                                  <Form.Item label="Translator backend" name="translator_backend">
+                                    <Select options={[
+                                      { value: 'rule', label: '內建規則翻譯' },
+                                      { value: 'tw_hokkien_llm', label: 'TW-Hokkien-LLM Translator' },
+                                    ]} />
+                                  </Form.Item>
+                                  <Form.Item label="Translator API base URL" name="translator_api_base_url">
+                                    <Input placeholder="http://127.0.0.1:8080/v1" />
+                                  </Form.Item>
+                                  <Form.Item label="Translator model" name="translator_model">
+                                    <Input placeholder="例如：Bohanlu/Taigi-Llama-2-Translator-7B 或 llama.cpp model alias" />
+                                  </Form.Item>
+                                  <Form.Item label="Translator API key" name="translator_api_key">
+                                    <Input.Password placeholder="本機服務可留空" />
+                                  </Form.Item>
+                                  <Form.Item label="目標書寫系統" name="translator_target_language">
+                                    <Select options={[
+                                      { value: 'HAN', label: '台語漢字（HAN）' },
+                                      { value: 'HL', label: '漢羅（HL）' },
+                                      { value: 'POJ', label: '白話字（POJ）' },
+                                    ]} />
+                                  </Form.Item>
+                                  <Form.Item label="Timeout（秒）" name="translator_timeout_seconds">
+                                    <InputNumber min={5} max={600} step={5} style={{ width: '100%' }} />
+                                  </Form.Item>
+                                </Space>
+                              ),
+                            },
                             {
                               key: 'llm',
                               label: 'LLM 亂數句子生成',
@@ -3053,6 +3879,8 @@ function App() {
                       <div><Text type="secondary">完成 Jobs</Text><strong>{stats.jobs_complete}</strong></div>
                       <div><Text type="secondary">語詞句庫</Text><strong>{stats.words_total}</strong></div>
                       <div><Text type="secondary">查詢次數</Text><strong>{stats.word_queries_total}</strong></div>
+                      <div><Text type="secondary">網頁造訪</Text><strong>{stats.page_visits_total ?? stats.actions?.page_visit ?? 0}</strong></div>
+                      <div><Text type="secondary">今日造訪</Text><strong>{stats.page_visits_today ?? (stats.daily ?? []).at(-1)?.actions?.page_visit ?? 0}</strong></div>
                     </div>
                   )}
                   {stats && (
@@ -3069,6 +3897,30 @@ function App() {
                         <div><Text type="secondary">資料匯出申請</Text><strong>{stats.lexicon_quality?.source_export_requests ?? 0}</strong></div>
                         <div><Text type="secondary">匯出申請人</Text><strong>{stats.lexicon_quality?.source_export_requesters ?? 0}</strong></div>
                         <div><Text type="secondary">語詞查詢</Text><strong>{stats.lexicon_quality?.word_queries_total ?? 0}</strong></div>
+                      </div>
+                      <div className="rating-distribution-grid">
+                        <div>
+                          <Text strong>詞條平均評分分布</Text>
+                          <div className="rating-distribution">
+                            {ratingScores.map((score) => (
+                              <div key={`word-entry-rating-${score}`}>
+                                <Text type="secondary">{score} 星</Text>
+                                <strong>{stats.lexicon_quality?.word_entry_rating_buckets?.[String(score) as keyof RatingBuckets] ?? 0}</strong>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <Text strong>語音平均評分分布</Text>
+                          <div className="rating-distribution">
+                            {ratingScores.map((score) => (
+                              <div key={`word-asset-rating-${score}`}>
+                                <Text type="secondary">{score} 星</Text>
+                                <strong>{stats.lexicon_quality?.word_asset_rating_buckets?.[String(score) as keyof RatingBuckets] ?? 0}</strong>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                       <div className="stats-grid compact-stats-grid">
                         <div><Text type="secondary">重新生成完成</Text><strong>{stats.lexicon_quality?.word_regeneration_complete ?? 0}</strong></div>
@@ -3088,6 +3940,7 @@ function App() {
                             <Text>{day.total || 0}</Text>
                             <Text type="secondary">
                               {t('dailyPlay')} {(day.actions?.play_audio || 0) + (day.actions?.play_video || 0)}
+                              {' '}造訪 {day.actions?.page_visit || 0}
                               {' '}{t('dailyShare')} {(day.actions?.copy_share_link || 0) + (day.actions?.share_line || 0) + (day.actions?.share_facebook || 0) + (day.actions?.share_x || 0)}
                               {' '}{t('dailyRate')} {(day.actions?.rate_job || 0) + (day.actions?.rate_word || 0) + (day.actions?.rate_segment || 0)}
                             </Text>
@@ -3109,6 +3962,49 @@ function App() {
 
                 <SourceGovernanceCard title={t('sourcesTitle')} copy={SOURCE_COPY[uiLanguage]} />
 
+                <Card className="about-card">
+                  <Flex align="start" justify="space-between" gap={12} wrap className="card-title">
+                    <div>
+                      <Title level={3} style={{ margin: 0 }}>{t('aboutTitle')}</Title>
+                      <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                        {t('aboutIntro')}
+                      </Paragraph>
+                    </div>
+                    <Button href="https://github.com/yihua1218/VoxCPM" target="_blank" rel="noreferrer" icon={<LinkOutlined />}>
+                      GitHub
+                    </Button>
+                  </Flex>
+                  <div className="about-grid">
+                    <div>
+                      <Text strong>{t('aboutFlowTitle')}</Text>
+                      <Paragraph type="secondary">
+                        {t('aboutFlowText')}
+                      </Paragraph>
+                    </div>
+                    <div>
+                      <Text strong>{t('aboutReviewTitle')}</Text>
+                      <Paragraph type="secondary">
+                        {t('aboutReviewText')}
+                      </Paragraph>
+                    </div>
+                    <div>
+                      <Text strong>{t('aboutLexiconTitle')}</Text>
+                      <Paragraph type="secondary">
+                        {t('aboutLexiconText')}
+                      </Paragraph>
+                    </div>
+                    <div>
+                      <Text strong>{t('aboutProjectTitle')}</Text>
+                      <Paragraph copyable={{ text: 'https://github.com/yihua1218/VoxCPM' }} style={{ marginBottom: 0 }}>
+                        <a href="https://github.com/yihua1218/VoxCPM" target="_blank" rel="noreferrer">
+                          https://github.com/yihua1218/VoxCPM
+                        </a>
+                      </Paragraph>
+                      <Text type="secondary">{t('aboutProjectText')}</Text>
+                    </div>
+                  </div>
+                </Card>
+
                 <Card className="sources-card">
                   <Flex align="start" justify="space-between" gap={12} wrap className="card-title">
                     <div>
@@ -3122,25 +4018,19 @@ function App() {
                       <Tag color="processing">申請人 {stats?.source_exports?.requester_count ?? 0}</Tag>
                     </Space>
                   </Flex>
-                  {!auth?.email ? (
-                    <Alert
-                      type="info"
-                      showIcon
-                      message="請先用 email 登入"
-                      description="只有 email 登入使用者可以申請匯出多語系資料，或申請增加多語系資料詞條。匿名使用者仍可查詢、播放與評分。"
-                    />
-                  ) : (
-                    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                  <Space direction="vertical" size={16} style={{ width: '100%' }}>
                       <div className="source-section">
                         <Flex align="center" justify="space-between" gap={12} wrap>
                           <div>
                             <Text strong>申請匯出網站多語系資料</Text>
                             <br />
                             <Text type="secondary">
-                              目前會先留下申請紀錄，包含 {auth.email}、語言範圍、格式與申請時間；資料檔案正式開放時可依紀錄通知。
+                              {auth?.email
+                                ? `目前會先留下申請紀錄，包含 ${auth.email}、語言範圍、格式與申請時間；資料檔案正式開放時可依紀錄通知。`
+                                : '匯出申請需要 email 登入；匿名使用者仍可在下方申請新增詞料。'}
                             </Text>
                           </div>
-                          <Button type="primary" loading={requestingSourceExport} onClick={requestSourceExport}>
+                          <Button type="primary" loading={requestingSourceExport} disabled={!auth?.email} onClick={requestSourceExport}>
                             申請匯出 JSON
                           </Button>
                         </Flex>
@@ -3149,7 +4039,7 @@ function App() {
                       <div className="source-section">
                         <Text strong>申請增加多語系資料詞條</Text>
                         <Paragraph type="secondary">
-                          送出後會建立詞條申請，並同時排入繁中、簡中、英文、日文、韓文、台語與台羅語料需求。
+                          匿名使用者可以申請新增詞料；email 登入使用者送出後會同時排入繁中、簡中、英文、日文、韓文、台語與台羅語料需求。
                         </Paragraph>
                         <Space direction="vertical" size={10} style={{ width: '100%' }}>
                           <Input
@@ -3169,22 +4059,88 @@ function App() {
                         </Space>
                       </div>
                     </Space>
-                  )}
                 </Card>
 
                 <Card className="lexicon-card">
                   <Flex align="center" justify="space-between" className="card-title" gap={12}>
                     <Title level={3} style={{ margin: 0 }}>{t('lexiconTitle')}</Title>
-                    <Text type="secondary">{words.length} shown</Text>
+                    <Text type="secondary">{visibleWords.length} / {words.length} shown</Text>
                   </Flex>
-                  <Input.Search
-                    allowClear
-                    placeholder={t('lexiconSearch')}
-                    value={wordQuery}
-                    onChange={(event) => setLexiconQuery(event.target.value)}
-                    onSearch={(value) => loadWords(value)}
-                    style={{ marginBottom: 12 }}
-                  />
+                  <div className="lexicon-controls">
+                    <Input.Search
+                      allowClear
+                      placeholder={t('lexiconSearch')}
+                      value={wordQuery}
+                      onChange={(event) => setLexiconQuery(event.target.value)}
+                      onSearch={(value) => loadWords(value)}
+                    />
+                    <Select<WordSort>
+                      value={wordSort}
+                      onChange={setWordSort}
+                      options={[
+                        { value: 'rating', label: '評分最高' },
+                        { value: 'newest', label: '最新更新' },
+                        { value: 'plays', label: '播放最多' },
+                        { value: 'usage', label: '使用最多' },
+                        { value: 'source', label: '詞條排序' },
+                      ]}
+                    />
+                    <Select<WordKindFilter>
+                      value={wordKindFilter}
+                      onChange={setWordKindFilter}
+                      options={[
+                        { value: 'all', label: '全部類型' },
+                        { value: 'word', label: '詞語' },
+                        { value: 'phrase', label: '固定語句' },
+                      ]}
+                    />
+                    <Select<WordRatingFilter>
+                      value={wordRatingFilter}
+                      onChange={setWordRatingFilter}
+                      options={[
+                        { value: 'all', label: '全部評分' },
+                        { value: 'rated', label: '已評分' },
+                        { value: 'unrated', label: '未評分' },
+                      ]}
+                    />
+                    <Select<WordMediaFilter>
+                      value={wordMediaFilter}
+                      onChange={setWordMediaFilter}
+                      options={[
+                        { value: 'all', label: '全部媒體' },
+                        { value: 'audio', label: '有語音' },
+                        { value: 'video', label: '有影片' },
+                        { value: 'missing_audio', label: '缺語音' },
+                      ]}
+                    />
+                    <Select<WordStatusFilter>
+                      value={wordStatusFilter}
+                      onChange={setWordStatusFilter}
+                      options={[
+                        { value: 'all', label: '全部狀態' },
+                        { value: 'problem', label: '有問題' },
+                        { value: 'ok', label: '無問題' },
+                        { value: 'generating', label: '生成中' },
+                        { value: 'requested', label: '新增申請' },
+                      ]}
+                    />
+                  </div>
+                  {!!normalizedWordQuery && words.length > 0 && !wordHasExactMatch && (
+                    <Alert
+                      type="info"
+                      showIcon
+                      style={{ marginBottom: 12 }}
+                      message="沒有完全相同的詞條"
+                      description={(
+                        <Flex align="center" justify="space-between" gap={12} wrap>
+                          <Text>{t('requestNewWordHint')}</Text>
+                          <Button type="primary" onClick={requestMissingWord}>
+                            {t('requestNewWord')}：{wordQuery.trim()}
+                          </Button>
+                        </Flex>
+                      )}
+                    />
+                  )}
                   {words.length === 0 ? (
                     <Alert
                       type="info"
@@ -3199,154 +4155,209 @@ function App() {
                         </Flex>
                       ) : undefined}
                     />
+                  ) : visibleWords.length === 0 ? (
+                    <Alert type="info" showIcon message="沒有符合目前排序與篩選條件的詞條。" />
                   ) : (
                     <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                      {words.map((word) => (
-                        <div key={word.id} className={`word-row ${word.problem ? 'has-problem' : ''}`}>
-                          <Flex align="start" justify="space-between" gap={10}>
-                            <div>
-                              <Text strong>{word.source}</Text>
-                              <Tag color={word.kind === 'phrase' ? 'purple' : 'blue'} style={{ marginLeft: 8 }}>
-                                {word.category || (word.kind === 'phrase' ? '固定語句' : '詞語')}
-                              </Tag>
-                              {word.status === 'requested' && <Tag color="warning">新增申請</Tag>}
-                              <br />
-                              <Text>{word.taigi}</Text>
-                              <br />
-                              <Text type="secondary">{word.tailo}</Text>
-                              {!!word.play_count && (
-                                <>
-                                  <br />
-                                  <Text type="secondary">播放 {word.play_count} 次</Text>
-                                </>
-                              )}
-                              {!!word.rating_count && (
-                                <>
-                                  <br />
-                                  <Text type="secondary">
-                                    平均 {word.rating_average?.toFixed(1)} / 5（{word.rating_count} 票）
-                                  </Text>
-                                </>
-                              )}
-                              {word.note && (
-                                <>
-                                  <br />
-                                  <Text type="secondary">{word.note}</Text>
-                                </>
-                              )}
-                              {!!word.request_count && (
-                                <>
-                                  <br />
-                                  <Text type="secondary">新增申請 {word.request_count} 次</Text>
-                                </>
-                              )}
-                            </div>
-                            <Tag color={word.problem ? 'error' : 'blue'}>{word.count}</Tag>
-                          </Flex>
-                          {word.problem && (
-                            <Text type="danger">{word.problem_reason || '已標記需要重新產生'}</Text>
-                          )}
-                          {word.generation_status && ['queued', 'running', 'failed'].includes(word.generation_status) && (
-                            <Alert
-                              type={word.generation_status === 'failed' ? 'error' : 'info'}
-                              showIcon
-                              message={word.generation_stage || '詞語語音生成狀態'}
-                              description={word.generation_status === 'queued' && word.generation_position ? `目前排第 ${word.generation_position} 個。` : word.generation_error}
-                            />
-                          )}
-                          {word.multilingual && Object.keys(word.multilingual).length > 0 && (
-                            <div className="word-corpus-panel">
-                              <Text strong>{t('multilingualCorpus')}</Text>
-                              <div className="word-corpus-grid">
-                                {UI_LANGUAGES.map((lang) => {
-                                  const item = word.multilingual?.[lang.value];
-                                  return (
-                                    <div key={lang.value} className={item?.status === 'pending' ? 'is-pending' : ''}>
-                                      <Flex align="center" justify="space-between" gap={6}>
-                                        <Text strong>{UI_LANGUAGE_LABELS[lang.value]}</Text>
-                                        <Tag color={item?.status === 'pending' ? 'warning' : 'processing'}>
-                                          {item?.status === 'pending' ? t('pendingReview') : item ? t('draft') : 'none'}
-                                        </Tag>
-                                      </Flex>
-                                      <Text type={item?.text ? undefined : 'secondary'}>
-                                        {item?.text || item?.note || '等待補稿'}
-                                      </Text>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          )}
-                          {(word.assets ?? []).length > 0 && (
-                            <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                              {(word.assets ?? []).map((asset, index) => (
-                                <div key={asset.id} className="word-asset-row">
-                                  <Flex align="center" justify="space-between" gap={10} wrap>
-                                    <Space size={8} wrap>
-                                      <Tag color={index === 0 ? 'gold' : 'blue'}>{index === 0 ? '目前最高排序' : `版本 ${index + 1}`}</Tag>
-                                      <Text type="secondary">
-                                        {asset.generated_by_name || '匿名使用者'} · {asset.created_at ? formatTime(asset.created_at) : '未知時間'}
-                                      </Text>
-                                      {!!asset.rating_count && (
-                                        <Text type="secondary">平均 {asset.rating_average?.toFixed(1)} / 5（{asset.rating_count} 票）</Text>
-                                      )}
-                                      {!!asset.play_count && <Text type="secondary">播放 {asset.play_count} 次</Text>}
-                                    </Space>
-                                    <Rate value={asset.my_rating ?? 0} onChange={(rating) => rateWordAsset(word, asset, rating)} />
-                                  </Flex>
-                                  {asset.has_audio && (
-                                    <div>
-                                      <audio
-                                        controls
-                                        preload="none"
-                                        src={wordAssetMediaSrc(word, asset, 'audio')}
-                                        style={{ width: '100%', marginTop: 8 }}
-                                      />
-                                      <Space size={8} wrap className="share-actions">
-                                        <Button size="small" icon={<CopyOutlined />} onClick={() => shareMedia(`word:${word.id}:${asset.id}:audio`, word.source, 'copy')}>複製音訊連結</Button>
-                                        <Button size="small" onClick={() => shareMedia(`word:${word.id}:${asset.id}:audio`, word.source, 'line')}>LINE</Button>
-                                        <Button size="small" onClick={() => shareMedia(`word:${word.id}:${asset.id}:audio`, word.source, 'facebook')}>Facebook</Button>
-                                      </Space>
-                                    </div>
-                                  )}
-                                  {asset.has_video && (
-                                    <div>
-                                      <video
-                                        controls
-                                        preload="metadata"
-                                        src={wordAssetMediaSrc(word, asset, 'video')}
-                                        style={{ width: '100%', marginTop: 8, borderRadius: 8, background: '#111' }}
-                                      />
-                                      <Space size={8} wrap className="share-actions">
-                                        <Button size="small" icon={<CopyOutlined />} onClick={() => shareMedia(`word:${word.id}:${asset.id}:video`, word.source, 'copy')}>複製影片連結</Button>
-                                        <Button size="small" onClick={() => shareMedia(`word:${word.id}:${asset.id}:video`, word.source, 'line')}>LINE</Button>
-                                        <Button size="small" onClick={() => shareMedia(`word:${word.id}:${asset.id}:video`, word.source, 'facebook')}>Facebook</Button>
-                                      </Space>
-                                    </div>
-                                  )}
+                      {visibleWords.map((word) => {
+                        const asset = primaryWordAsset(word);
+                        const expanded = !!expandedWordIds[word.id];
+                        const isGenerating = word.generation_status && ['queued', 'running'].includes(word.generation_status);
+                        const selectedTokenCount = wordSelectedTokens(word).length;
+                        return (
+                          <div key={word.id} className={`word-row ${word.problem ? 'has-problem' : ''}`}>
+                            <Flex align="start" justify="space-between" gap={10} className="word-row-main">
+                              <div className="word-row-summary">
+                                <div className="word-row-title">
+                                  <Text strong>{word.source}</Text>
+                                  <Tag color={word.kind === 'phrase' ? 'purple' : 'blue'}>
+                                    {word.category || (word.kind === 'phrase' ? '固定語句' : '詞語')}
+                                  </Tag>
+                                  {word.status === 'requested' && <Tag color="warning">新增申請</Tag>}
+                                  {word.problem && <Tag color="error">需處理</Tag>}
+                                  {isGenerating && <Tag color="processing">生成中</Tag>}
+                                  {word.generation_status === 'failed' && <Tag color="error">生成失敗</Tag>}
+                                  <Tag color="default">{word.count}</Tag>
                                 </div>
-                              ))}
-                            </Space>
-                          )}
-                          <Flex align="center" justify="space-between" gap={10} wrap>
-                            <Flex align="center" gap={8} wrap>
-                              <Text type="secondary">{t('rateAudio')}</Text>
-                              <Rate value={word.my_rating ?? 0} onChange={(rating) => rateWord(word, rating)} />
+                                <Text>{word.taigi}</Text>
+                                <Text type="secondary">{word.tailo}</Text>
+                                <Space size={8} wrap className="word-row-meta">
+                                  {!!word.play_count && <Text type="secondary">播放 {word.play_count} 次</Text>}
+                                  {!!word.rating_count && (
+                                    <Text type="secondary">{formatRatingText(word.rating_average, word.rating_count)}</Text>
+                                  )}
+                                  {!!word.request_count && <Text type="secondary">新增申請 {word.request_count} 次</Text>}
+                                  {word.note && <Text type="secondary">{word.note}</Text>}
+                                </Space>
+                              </div>
+                              <Space size={8} wrap className="word-row-actions">
+                                <Flex align="center" gap={6} wrap className="word-row-rating">
+                                  <Text type="secondary">詞條評分</Text>
+                                  <Rate value={word.my_rating ?? 0} onChange={(rating) => rateWord(word, rating)} />
+                                </Flex>
+                                {asset?.has_audio ? (
+                                  <Button size="small" icon={<AudioOutlined />} onClick={() => playWordAudio(word)}>
+                                    播放語音
+                                  </Button>
+                                ) : (
+                                  <Button size="small" icon={<AudioOutlined />} onClick={() => generateWordAudio(word)}>
+                                    產生語音
+                                  </Button>
+                                )}
+                                <Button size="small" icon={<FileTextOutlined />} onClick={() => toggleWordDetails(word.id)}>
+                                  {expanded ? '收合詳細' : '詳細'}
+                                </Button>
+                              </Space>
                             </Flex>
-                            <Space size={8} wrap>
-                              <Button size="small" type={word.problem ? 'primary' : 'default'} onClick={() => generateWordAudio(word)}>
-                                {word.problem ? t('regenerateWord') : t('generateWord')}
-                              </Button>
-                              <Button size="small" onClick={() => reportWordIssue(word)}>
-                                {t('reportIssue')}
-                              </Button>
-                              <Button size="small" onClick={() => requestWordCorpus(word)}>
-                                {t('requestCorpus')}
-                              </Button>
-                            </Space>
-                          </Flex>
-                        </div>
-                      ))}
+                            {expanded && (
+                              <div className="word-row-details">
+                                {word.problem && (
+                                  <Text type="danger">{word.problem_reason || '已標記需要重新產生'}</Text>
+                                )}
+                                {word.generation_status && ['queued', 'running', 'failed'].includes(word.generation_status) && (
+                                  <Alert
+                                    type={word.generation_status === 'failed' ? 'error' : 'info'}
+                                    showIcon
+                                    message={word.generation_stage || '詞語語音生成狀態'}
+                                    description={word.generation_status === 'queued' && word.generation_position ? `目前排第 ${word.generation_position} 個。` : word.generation_error}
+                                  />
+                                )}
+                                {(word.source_tokens ?? []).length > 1 && (
+                                  <div className="segment-token-panel">
+                                    <Flex align="center" justify="space-between" gap={8} wrap>
+                                      <Space size={8} wrap>
+                                        <Text strong>語句斷詞標示</Text>
+                                        <Tag>{word.source_tokens?.length ?? 0} 詞</Tag>
+                                        {selectedTokenCount > 0 && <Tag color="processing">已選 {selectedTokenCount}</Tag>}
+                                      </Space>
+                                      <Space size={6} wrap>
+                                        <Button size="small" danger onClick={() => markWordTokens(word, 'problem')}>
+                                          標示有問題
+                                        </Button>
+                                        <Button size="small" onClick={() => markWordTokens(word, 'ok')}>
+                                          標示沒問題
+                                        </Button>
+                                        <Button size="small" disabled={selectedTokenCount === 0} onClick={() => clearWordTokenSelection(word.id)}>
+                                          清除選取
+                                        </Button>
+                                      </Space>
+                                    </Flex>
+                                    <div className="segment-token-list">
+                                      {(word.source_tokens ?? []).map((token, tokenIndex) => (
+                                        <button
+                                          type="button"
+                                          key={`${word.id}-${token.source}-${tokenIndex}`}
+                                          className={[
+                                            'segment-token',
+                                            token.problem ? 'has-problem' : '',
+                                            wordTokenStatus(token) === 'problem' ? 'is-reviewed-problem' : '',
+                                            wordTokenStatus(token) === 'ok' ? 'is-reviewed-ok' : '',
+                                            selectedWordTokens[word.id]?.includes(segmentTokenKey(token)) ? 'is-selected' : '',
+                                          ].filter(Boolean).join(' ')}
+                                          onClick={() => toggleWordToken(word, token)}
+                                        >
+                                          <span>{token.source}</span>
+                                          {wordTokenStatus(token) === 'problem' && <small>有問題</small>}
+                                          {wordTokenStatus(token) === 'ok' && <small>沒問題</small>}
+                                          {!wordTokenStatus(token) && token.exists && <small>{token.problem ? '問題' : token.has_audio ? '有音檔' : '詞庫'}</small>}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {word.multilingual && Object.keys(word.multilingual).length > 0 && (
+                                  <div className="word-corpus-panel">
+                                    <Text strong>{t('multilingualCorpus')}</Text>
+                                    <div className="word-corpus-grid">
+                                      {UI_LANGUAGES.map((lang) => {
+                                        const item = word.multilingual?.[lang.value];
+                                        return (
+                                          <div key={lang.value} className={item?.status === 'pending' ? 'is-pending' : ''}>
+                                            <Flex align="center" justify="space-between" gap={6}>
+                                              <Text strong>{UI_LANGUAGE_LABELS[lang.value]}</Text>
+                                              <Tag color={item?.status === 'pending' ? 'warning' : 'processing'}>
+                                                {item?.status === 'pending' ? t('pendingReview') : item ? t('draft') : 'none'}
+                                              </Tag>
+                                            </Flex>
+                                            <Text type={item?.text ? undefined : 'secondary'}>
+                                              {item?.text || item?.note || '等待補稿'}
+                                            </Text>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                )}
+                                {(word.assets ?? []).length > 0 && (
+                                  <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                                    {(word.assets ?? []).map((assetItem, index) => (
+                                      <div key={assetItem.id} className="word-asset-row">
+                                        <Flex align="center" justify="space-between" gap={10} wrap>
+                                          <Space size={8} wrap>
+                                            <Tag color={index === 0 ? 'gold' : 'blue'}>{index === 0 ? '目前最高排序' : `版本 ${index + 1}`}</Tag>
+                                            <Text type="secondary">
+                                              {assetItem.generated_by_name || '匿名使用者'} · {assetItem.created_at ? formatDateTime(assetItem.created_at) : '未知時間'}
+                                            </Text>
+                                            {!!assetItem.rating_count && (
+                                              <Text type="secondary">{formatRatingText(assetItem.rating_average, assetItem.rating_count)}</Text>
+                                            )}
+                                            {!!assetItem.play_count && <Text type="secondary">播放 {assetItem.play_count} 次</Text>}
+                                          </Space>
+                                        </Flex>
+                                        {assetItem.has_audio && (
+                                          <div>
+                                            <audio
+                                              controls
+                                              preload="none"
+                                              src={wordAssetMediaSrc(word, assetItem, 'audio')}
+                                              style={{ width: '100%', marginTop: 8 }}
+                                            />
+                                            <Flex align="center" gap={8} wrap className="word-asset-rating">
+                                              <Text type="secondary">正確度評分</Text>
+                                              <Rate value={assetItem.my_rating ?? 0} onChange={(rating) => rateWordAsset(word, assetItem, rating)} />
+                                            </Flex>
+                                            <Space size={8} wrap className="share-actions">
+                                              <Button size="small" icon={<CopyOutlined />} onClick={() => shareMedia(`word:${word.id}:${assetItem.id}:audio`, word.source, 'copy')}>複製音訊連結</Button>
+                                              <Button size="small" onClick={() => shareMedia(`word:${word.id}:${assetItem.id}:audio`, word.source, 'line')}>LINE</Button>
+                                              <Button size="small" onClick={() => shareMedia(`word:${word.id}:${assetItem.id}:audio`, word.source, 'facebook')}>Facebook</Button>
+                                            </Space>
+                                          </div>
+                                        )}
+                                        {assetItem.has_video && (
+                                          <div className="word-video-actions">
+                                            <Space size={8} wrap>
+                                              <Button size="small" icon={<VideoCameraOutlined />} onClick={() => openWordAssetVideo(word, assetItem)}>
+                                                開新視窗播放影片
+                                              </Button>
+                                              <Button size="small" icon={<CopyOutlined />} onClick={() => shareMedia(`word:${word.id}:${assetItem.id}:video`, word.source, 'copy')}>複製影片連結</Button>
+                                              <Button size="small" onClick={() => shareMedia(`word:${word.id}:${assetItem.id}:video`, word.source, 'line')}>LINE</Button>
+                                              <Button size="small" onClick={() => shareMedia(`word:${word.id}:${assetItem.id}:video`, word.source, 'facebook')}>Facebook</Button>
+                                            </Space>
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </Space>
+                                )}
+                                <Flex align="center" justify="space-between" gap={10} wrap>
+                                  <Text type="secondary">詞條評分可直接在精簡列調整。</Text>
+                                  <Space size={8} wrap>
+                                    <Button size="small" type={word.problem ? 'primary' : 'default'} onClick={() => generateWordAudio(word)}>
+                                      {word.problem ? t('regenerateWord') : t('generateWord')}
+                                    </Button>
+                                    <Button size="small" onClick={() => reportWordIssue(word)}>
+                                      {t('reportIssue')}
+                                    </Button>
+                                    <Button size="small" onClick={() => requestWordCorpus(word)}>
+                                      {t('requestCorpus')}
+                                    </Button>
+                                  </Space>
+                                </Flex>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </Space>
                   )}
                 </Card>
@@ -3356,6 +4367,55 @@ function App() {
                     <Title level={3} style={{ margin: 0 }}>{t('jobs')}</Title>
                     <Text type="secondary">{jobs.length} 筆</Text>
                   </Flex>
+                  <div className="job-overview-controls">
+                    <Input.Search
+                      allowClear
+                      placeholder="搜尋已完成/失敗工作、標題、內容、台語、台羅"
+                      value={jobSearch}
+                      onChange={(event) => setJobSearch(event.target.value)}
+                    />
+                    <Select<CompletedJobSort>
+                      value={completedJobSort}
+                      onChange={setCompletedJobSort}
+                      options={[
+                        { value: 'newest', label: '最新優先' },
+                        { value: 'oldest', label: '最舊優先' },
+                        { value: 'rating', label: '評分最高' },
+                        { value: 'plays', label: '播放最多' },
+                        { value: 'duration', label: `${t('elapsedLabel')}最長` },
+                        { value: 'title', label: '標題排序' },
+                      ]}
+                    />
+                    <Select<JobKindFilter>
+                      value={completedJobKindFilter}
+                      onChange={setCompletedJobKindFilter}
+                      options={[
+                        { value: 'all', label: '全部類型' },
+                        { value: 'script', label: '稿件影片' },
+                        { value: 'segment_regeneration', label: '重生分段' },
+                        { value: 'word_asset', label: '詞語語音' },
+                        { value: 'maintenance', label: '維護清理' },
+                      ]}
+                    />
+                    <Select<CompletedJobRatingFilter>
+                      value={completedJobRatingFilter}
+                      onChange={setCompletedJobRatingFilter}
+                      options={[
+                        { value: 'all', label: '全部評分' },
+                        { value: 'rated', label: '已有評分' },
+                        { value: 'unrated', label: '尚未評分' },
+                      ]}
+                    />
+                    <Select<CompletedJobMediaFilter>
+                      value={completedJobMediaFilter}
+                      onChange={setCompletedJobMediaFilter}
+                      options={[
+                        { value: 'all', label: '全部媒體' },
+                        { value: 'video', label: '有影片' },
+                        { value: 'audio', label: '有音訊' },
+                      ]}
+                    />
+                  </div>
                   {jobs.length === 0 ? (
                     <Alert type="info" showIcon message={signedIn ? '目前沒有工作' : '目前沒有已完成的公開工作'} />
                   ) : (
@@ -3363,10 +4423,22 @@ function App() {
                       {jobGroups.map((group) => (
                         <div key={group.key} className="job-group">
                           <Flex align="center" justify="space-between" className="job-group-title">
-                            <Text strong>{group.label}</Text>
-                            <Tag>{group.jobs.length}</Tag>
+                            <Space size={8} wrap>
+                              <Text strong>{group.label}</Text>
+                              <Tag>{group.jobs.length}</Tag>
+                              {group.key === 'complete' && (
+                                <Text type="secondary">符合目前條件</Text>
+                              )}
+                            </Space>
+                            {group.key === 'queued' && group.jobs.length > 0 && (
+                              <Button size="small" onClick={() => setShowQueuedJobs((current) => !current)}>
+                                {showQueuedJobs ? '收合隊列' : `展開 ${group.jobs.length} 筆隊列`}
+                              </Button>
+                            )}
                           </Flex>
-                          {group.jobs.length === 0 ? (
+                          {group.key === 'queued' && group.collapsed && group.jobs.length > 0 ? (
+                            <Alert type="info" showIcon message={`目前有 ${group.jobs.length} 筆工作在隊列中`} description="點選展開才顯示隊列中的工作項目。" />
+                          ) : group.jobs.length === 0 ? (
                             <Text type="secondary">沒有{group.label}的工作。</Text>
                           ) : (
                             group.jobs.map((job) => (
@@ -3377,17 +4449,15 @@ function App() {
                                 <button className="job-row-main" onClick={() => openJobInWorkTab(job.id)}>
                                   <div className="job-row-name">
                                     <Text strong ellipsis>{jobDisplayTitle(job)}</Text>
-                                    <Tag color={job.kind === 'word_asset' ? 'purple' : 'cyan'}>
-                                      {job.kind === 'word_asset' ? t('jobKindWord') : t('jobKindScript')}
-                                    </Tag>
+                                    <Tag color={jobKindColor(job)}>{jobKindLabel(job, t)}</Tag>
                                     <Tag color={statusColor[job.status]}>{job.status}</Tag>
                                   </div>
                                   <Progress percent={job.progress} size="small" showInfo={false} />
                                   <PipelineStrip job={job} compact />
                                   <Text type="secondary">
-                                    {job.stage} · {formatTime(job.updated_at)}
-                                    {formatDuration(job.elapsed_seconds) ? ` · 耗時 ${formatDuration(job.elapsed_seconds)}` : ''}
-                                    {job.rating_count ? ` · 平均 ${job.rating_average?.toFixed(1)} / 5（${job.rating_count} 票）` : ''}
+                                    {job.stage} · {formatDateTime(job.updated_at)}
+                                    {formatDurationText(job.elapsed_seconds) ? ` · ${t('elapsedLabel')} ${formatDurationText(job.elapsed_seconds)}` : ''}
+                                    {job.rating_count ? ` · ${formatRatingText(job.rating_average, job.rating_count)}` : ''}
                                     {job.play_count ? ` · 播放 ${job.play_count} 次` : ''}
                                   </Text>
                                 </button>
@@ -3407,11 +4477,22 @@ function App() {
                                     </Space>
                                   </Flex>
                                 )}
-                                {job.status === 'failed' && isAdmin && (
-                                  <Flex justify="flex-end" className="job-row-actions">
-                                    <Button size="small" danger icon={<DeleteOutlined />} onClick={() => deleteJob(job)}>
-                                      刪除失敗工作
+                                {job.status === 'failed' && (
+                                  <Flex justify="flex-end" gap={8} wrap className="job-row-actions">
+                                    <Button
+                                      size="small"
+                                      type="primary"
+                                      icon={<ReloadOutlined />}
+                                      loading={!!retryingJobs[job.id]}
+                                      onClick={() => retryJob(job)}
+                                    >
+                                      重新執行
                                     </Button>
+                                    {isAdmin && (
+                                      <Button size="small" danger icon={<DeleteOutlined />} onClick={() => deleteJob(job)}>
+                                        刪除失敗工作
+                                      </Button>
+                                    )}
                                   </Flex>
                                 )}
                               </div>

@@ -153,6 +153,10 @@ a {
   min-width: 112px;
 }
 
+.time-format-select {
+  min-width: 92px;
+}
+
 .header-login-input {
   width: 170px;
 }
@@ -183,21 +187,24 @@ a {
 .app-grid.show-work .lexicon-card,
 .app-grid.show-work .jobs-card,
 .app-grid.show-work .stats-card,
-.app-grid.show-work .sources-card {
+.app-grid.show-work .sources-card,
+.app-grid.show-work .about-card {
   display: none;
 }
 
 .app-grid.show-lexicon,
 .app-grid.show-jobs,
 .app-grid.show-stats,
-.app-grid.show-sources {
+.app-grid.show-sources,
+.app-grid.show-about {
   grid-template-columns: minmax(0, 1fr);
 }
 
 .app-grid.show-lexicon > .ant-space:first-child,
 .app-grid.show-jobs > .ant-space:first-child,
 .app-grid.show-stats > .ant-space:first-child,
-.app-grid.show-sources > .ant-space:first-child {
+.app-grid.show-sources > .ant-space:first-child,
+.app-grid.show-about > .ant-space:first-child {
   display: none;
 }
 
@@ -214,6 +221,10 @@ a {
 }
 
 .app-grid.show-sources > .ant-space:nth-child(2) > .ant-space-item:not(:has(.sources-card)) {
+  display: none;
+}
+
+.app-grid.show-about > .ant-space:nth-child(2) > .ant-space-item:not(:has(.about-card)) {
   display: none;
 }
 
@@ -302,6 +313,20 @@ a {
   gap: 8px;
 }
 
+.job-overview-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) repeat(4, minmax(128px, 160px));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.lexicon-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) repeat(5, minmax(118px, 150px));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .job-group-title {
   padding: 0 2px;
 }
@@ -320,6 +345,44 @@ a {
   background: #fff7f6;
 }
 
+.word-row-main {
+  width: 100%;
+}
+
+.word-row-summary {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.word-row-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.word-row-meta {
+  min-height: 22px;
+}
+
+.word-row-actions {
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.word-row-rating {
+  min-width: 184px;
+  justify-content: flex-end;
+}
+
+.word-row-details {
+  border-top: 1px solid #e8e8ed;
+  padding-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
 .word-asset-row {
   border: 1px solid #e8e8ed;
   border-radius: 8px;
@@ -327,6 +390,17 @@ a {
   background: #fbfbfd;
   display: grid;
   gap: 8px;
+}
+
+.word-asset-rating {
+  margin-top: 6px;
+  margin-bottom: 6px;
+}
+
+.word-video-actions {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e8e8ed;
 }
 
 .word-corpus-panel {
@@ -384,6 +458,56 @@ a {
 
 .compact-stats-grid strong {
   font-size: 20px;
+}
+
+.rating-distribution-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.rating-distribution-grid > div {
+  border: 1px solid #e8e8ed;
+  border-radius: 8px;
+  padding: 10px;
+  background: #fbfbfd;
+  display: grid;
+  gap: 10px;
+}
+
+.rating-distribution {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.rating-distribution > div {
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  padding: 8px;
+  background: #fff;
+  display: grid;
+  gap: 4px;
+  text-align: center;
+}
+
+.about-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.about-grid > div {
+  border: 1px solid #e8e8ed;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfbfd;
+  display: grid;
+  gap: 6px;
+}
+
+.about-grid .ant-typography {
+  margin-bottom: 0;
 }
 
 .side-stats-grid {
@@ -622,6 +746,19 @@ a {
 
 .queue-status {
   margin-bottom: 16px;
+  min-height: 104px;
+}
+
+.queue-status .ant-alert-message,
+.queue-status .ant-alert-description {
+  line-height: 1.45;
+}
+
+.stable-number {
+  display: inline-block;
+  min-width: 2.8ch;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .job-error {
@@ -676,9 +813,92 @@ a {
   margin-top: 12px;
 }
 
+.segment-token-panel {
+  border: 1px solid #e8e8ed;
+  border-radius: 8px;
+  padding: 10px;
+  background: #fbfbfd;
+  display: grid;
+  gap: 8px;
+}
+
+.segment-token-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  line-height: 1.9;
+}
+
+.segment-token {
+  appearance: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  max-width: 100%;
+  border: 1px solid #d6e8ff;
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: #f2f7ff;
+  color: #1d1d1f;
+  cursor: pointer;
+  font: inherit;
+  min-height: 30px;
+  text-align: left;
+}
+
+.segment-token:hover {
+  background: #e6f2ff;
+  color: #0071e3;
+}
+
+.segment-token.has-problem {
+  border-color: #ffccc7;
+  background: #fff7f6;
+}
+
+.segment-token.is-reviewed-problem {
+  border-color: #ff7875;
+  background: #fff1f0;
+  color: #a8071a;
+}
+
+.segment-token.is-reviewed-ok {
+  border-color: #95de64;
+  background: #f6ffed;
+  color: #237804;
+}
+
+.segment-token.is-selected {
+  border-color: #0071e3;
+  background: #0071e3;
+  color: #fff;
+}
+
+.segment-token span,
+.segment-token small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.segment-token span {
+  font-weight: 700;
+}
+
+.segment-token small {
+  color: #6e6e73;
+  font-size: 11px;
+}
+
+.segment-token.is-selected small {
+  color: rgba(255, 255, 255, 0.78);
+}
+
 .correction-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 126px auto;
   gap: 8px;
 }
 
@@ -697,6 +917,14 @@ a {
 
   .correction-row {
     grid-template-columns: 1fr;
+  }
+
+  .job-overview-controls {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .lexicon-controls {
+    grid-template-columns: 1fr 1fr;
   }
 
   .app-header {
@@ -815,6 +1043,28 @@ a {
     grid-template-columns: 1fr;
   }
 
+  .rating-distribution-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .about-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .word-row-main {
+    flex-direction: column;
+  }
+
+  .word-row-actions,
+  .word-row-actions .ant-btn {
+    width: 100%;
+  }
+
+  .word-row-rating {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
   .governance-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -905,6 +1155,14 @@ a {
   .job-row-name {
     flex-direction: column;
     gap: 6px;
+  }
+
+  .job-overview-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .lexicon-controls {
+    grid-template-columns: 1fr;
   }
 
   .job-row .ant-progress {
