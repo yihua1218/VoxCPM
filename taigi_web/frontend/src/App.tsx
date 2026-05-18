@@ -42,8 +42,14 @@ axios.defaults.timeout = 30000;
 const { Header, Content, Footer } = Layout;
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
+const API_BASE_URL = ((import.meta.env.VITE_API_BASE_URL as string | undefined) || '').replace(/\/$/, '');
 const STATIC_DATA_BASE = ((import.meta.env.VITE_STATIC_DATA_BASE_URL as string | undefined) || '/static-data/public').replace(/\/$/, '');
+const PREFER_STATIC_DATA = ((import.meta.env.VITE_PREFER_STATIC_DATA as string | undefined) || '').toLowerCase() === 'true';
 const AUTH_SESSION_STORAGE_KEY = 'taigi_web_session_token';
+
+if (API_BASE_URL) {
+  axios.defaults.baseURL = API_BASE_URL;
+}
 
 function setAuthSessionToken(token: string | null) {
   if (token) {
@@ -2023,9 +2029,11 @@ function App() {
   const [form] = Form.useForm<FormValues>();
   const detachedAudioRef = useRef<HTMLAudioElement | null>(null);
 
+  const safeJobs = Array.isArray(jobs) ? jobs : [];
+  const safeWords = Array.isArray(words) ? words : [];
   const selectedJob = useMemo(
-    () => jobs.find((job) => job.id === selectedJobId) ?? null,
-    [jobs, selectedJobId],
+    () => safeJobs.find((job) => job.id === selectedJobId) ?? null,
+    [safeJobs, selectedJobId],
   );
 
   const signedIn = !!auth?.authenticated;
@@ -2132,7 +2140,7 @@ function App() {
     ].some((value) => String(value || '').toLowerCase().includes(cleaned));
   };
   const completedJobs = useMemo(() => {
-    const filtered = jobs.filter((job) => {
+    const filtered = safeJobs.filter((job) => {
       if (job.status !== 'complete') return false;
       if (!jobMatchesSearch(job, jobSearch)) return false;
       if (completedJobKindFilter !== 'all' && job.kind !== completedJobKindFilter) return false;
@@ -2152,24 +2160,24 @@ function App() {
       if (completedJobSort === 'title') return jobDisplayTitle(a).localeCompare(jobDisplayTitle(b), 'zh-Hant') || newestFirst(a, b);
       return newestFirst(a, b);
     });
-  }, [jobs, jobSearch, completedJobKindFilter, completedJobContentFilter, completedJobIssueFilter, completedJobRatingFilter, completedJobMediaFilter, completedJobSort]);
+  }, [safeJobs, jobSearch, completedJobKindFilter, completedJobContentFilter, completedJobIssueFilter, completedJobRatingFilter, completedJobMediaFilter, completedJobSort]);
   const jobGroups = useMemo(() => ([
-    { key: 'running', label: '處理中', jobs: jobs.filter((job) => job.status === 'running').sort(newestFirst) },
-    { key: 'queued', label: '隊列中', jobs: jobs.filter((job) => job.status === 'queued').sort(newestFirst), collapsed: !showQueuedJobs },
+    { key: 'running', label: '處理中', jobs: safeJobs.filter((job) => job.status === 'running').sort(newestFirst) },
+    { key: 'queued', label: '隊列中', jobs: safeJobs.filter((job) => job.status === 'queued').sort(newestFirst), collapsed: !showQueuedJobs },
     { key: 'complete', label: '已完成', jobs: completedJobs },
-    { key: 'failed', label: '失敗', jobs: jobs.filter((job) => job.status === 'failed' && jobMatchesSearch(job, jobSearch) && jobMatchesContentFilter(job, completedJobContentFilter)).sort(newestFirst) },
-  ]), [jobs, completedJobs, jobSearch, completedJobContentFilter, showQueuedJobs]);
+    { key: 'failed', label: '失敗', jobs: safeJobs.filter((job) => job.status === 'failed' && jobMatchesSearch(job, jobSearch) && jobMatchesContentFilter(job, completedJobContentFilter)).sort(newestFirst) },
+  ]), [safeJobs, completedJobs, jobSearch, completedJobContentFilter, showQueuedJobs]);
   const featuredJobs = useMemo(() => (
-    jobs
+    safeJobs
       .filter((job) => job.status === 'complete' && !!job.featured_at)
       .sort((a, b) => (b.featured_at || 0) - (a.featured_at || 0))
-  ), [jobs]);
+  ), [safeJobs]);
   const normalizedWordQuery = wordQuery.trim().replace(/\s+/g, '').toLowerCase();
-  const wordHasExactMatch = !!normalizedWordQuery && words.some((word) => (
+  const wordHasExactMatch = !!normalizedWordQuery && safeWords.some((word) => (
     word.source.trim().replace(/\s+/g, '').toLowerCase() === normalizedWordQuery
   ));
   const visibleWords = useMemo(() => {
-    const filtered = words.filter((word) => {
+    const filtered = safeWords.filter((word) => {
       if (wordKindFilter !== 'all' && (word.kind || 'word') !== wordKindFilter) return false;
       if (wordRatingFilter === 'rated' && !(word.rating_count && word.rating_count > 0)) return false;
       if (wordRatingFilter === 'unrated' && (word.rating_count && word.rating_count > 0)) return false;
@@ -2190,7 +2198,7 @@ function App() {
       if (wordSort === 'source') return a.source.localeCompare(b.source, 'zh-Hant') || highestRatedWordFirst(a, b);
       return highestRatedWordFirst(a, b);
     });
-  }, [words, wordKindFilter, wordRatingFilter, wordMediaFilter, wordStatusFilter, wordSort]);
+  }, [safeWords, wordKindFilter, wordRatingFilter, wordMediaFilter, wordStatusFilter, wordSort]);
   const publicWaitSeconds = queueStatus?.rate_limit.next_available_at
     ? Math.max(0, queueStatus.rate_limit.next_available_at - nowSeconds)
     : 0;
@@ -2270,28 +2278,43 @@ function App() {
     setApiInfo(res.data);
   };
 
+  const applyJobs = (nextJobs: Job[]) => {
+    setJobs(nextJobs);
+    setSelectedJobId((current) => {
+      if (nextJobs.length === 0) return null;
+      if (current && nextJobs.some((job) => job.id === current)) return current;
+      return nextJobs.find((job) => job.status === 'complete' && !!job.featured_at)?.id ?? nextJobs[0].id;
+    });
+  };
+
+  const loadStaticJobs = async () => {
+    const snapshot = await loadStaticSnapshot<{ jobs: Job[] }>('jobs/index.json');
+    const nextJobs = Array.isArray(snapshot.jobs) ? snapshot.jobs : [];
+    setReadOnlyMode(true);
+    applyJobs(nextJobs);
+  };
+
+  const loadLiveJobs = async () => {
+    const res = await axios.get<{ jobs: Job[] }>('/jobs');
+    const nextJobs = Array.isArray(res.data.jobs) ? res.data.jobs : [];
+    setReadOnlyMode(false);
+    applyJobs(nextJobs);
+  };
+
   const loadJobs = async () => {
     setLoadingJobs(true);
     try {
-      const res = await axios.get<{ jobs: Job[] }>('/jobs');
-      const nextJobs = res.data.jobs;
-      setReadOnlyMode(false);
-      setJobs(nextJobs);
-      setSelectedJobId((current) => {
-        if (nextJobs.length === 0) return null;
-        if (current && nextJobs.some((job) => job.id === current)) return current;
-        return nextJobs.find((job) => job.status === 'complete' && !!job.featured_at)?.id ?? nextJobs[0].id;
-      });
-    } catch (error) {
-      const snapshot = await loadStaticSnapshot<{ jobs: Job[] }>('jobs/index.json');
-      const nextJobs = snapshot.jobs ?? [];
-      setReadOnlyMode(true);
-      setJobs(nextJobs);
-      setSelectedJobId((current) => {
-        if (nextJobs.length === 0) return null;
-        if (current && nextJobs.some((job) => job.id === current)) return current;
-        return nextJobs.find((job) => job.status === 'complete' && !!job.featured_at)?.id ?? nextJobs[0].id;
-      });
+      if (PREFER_STATIC_DATA && !signedIn) {
+        await loadStaticJobs();
+      } else {
+        await loadLiveJobs();
+      }
+    } catch {
+      if (PREFER_STATIC_DATA && !signedIn) {
+        await loadLiveJobs();
+      } else {
+        await loadStaticJobs();
+      }
     } finally {
       setJobsLoaded(true);
       setLoadingJobs(false);
@@ -2311,21 +2334,24 @@ function App() {
   const loadWords = async (query = wordQueryRef.current) => {
     wordQueryRef.current = query;
     try {
+      if (PREFER_STATIC_DATA && !signedIn) {
+        throw new Error('Prefer static lexicon snapshot.');
+      }
       const res = await axios.get<{ words: WordEntry[]; total: number }>('/words', { params: { q: query, limit: 200 } });
       setReadOnlyMode(false);
-      setWords(res.data.words);
+      setWords(Array.isArray(res.data.words) ? res.data.words : []);
     } catch {
       const snapshot = await loadStaticSnapshot<{ words: WordEntry[]; total: number }>('lexicon/index.json');
       const cleaned = query.trim().toLowerCase();
       const filtered = cleaned
-        ? (snapshot.words ?? []).filter((item) => (
+        ? (Array.isArray(snapshot.words) ? snapshot.words : []).filter((item) => (
           item.source.toLowerCase().includes(cleaned)
           || item.taigi.toLowerCase().includes(cleaned)
           || item.tailo.toLowerCase().includes(cleaned)
           || (item.category ?? '').toLowerCase().includes(cleaned)
           || (item.note ?? '').toLowerCase().includes(cleaned)
         ))
-        : (snapshot.words ?? []);
+        : (Array.isArray(snapshot.words) ? snapshot.words : []);
       setReadOnlyMode(true);
       setWords(filtered.slice(0, 200));
     }
@@ -2333,6 +2359,9 @@ function App() {
 
   const loadStats = async () => {
     try {
+      if (PREFER_STATIC_DATA && !signedIn) {
+        throw new Error('Prefer static stats snapshot.');
+      }
       const res = await axios.get<StatsSummary>('/stats');
       setReadOnlyMode(false);
       setStats(res.data);
@@ -2344,6 +2373,7 @@ function App() {
   };
 
   const recordAction = async (action: string, targetType = '', targetId = '', metadata: Record<string, unknown> = {}) => {
+    if (PREFER_STATIC_DATA && !signedIn) return;
     await axios.post('/stats/action', { action, target_type: targetType, target_id: targetId, metadata }).catch(() => undefined);
     await loadStats().catch(() => undefined);
   };
@@ -2411,8 +2441,11 @@ function App() {
   };
 
   const loadSegments = async (jobId: string) => {
-    const res = await axios.get<{ segments: Segment[] }>(`/jobs/${jobId}/segments`);
-    const nextSegments = res.data.segments;
+    const staticSegmentsUrl = selectedJob?.id === jobId ? selectedJob.static_media?.segments : '';
+    const res = PREFER_STATIC_DATA && !signedIn && staticSegmentsUrl
+      ? await axios.get<{ segments: Segment[] }>(staticSegmentsUrl, { timeout: 10000 })
+      : await axios.get<{ segments: Segment[] }>(`/jobs/${jobId}/segments`);
+    const nextSegments = Array.isArray(res.data.segments) ? res.data.segments : [];
     const nextDrafts: Record<number, SegmentReviewPayload> = {};
     for (const segment of nextSegments) {
       nextDrafts[segment.index] = {
@@ -2456,7 +2489,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!window.sessionStorage.getItem('taigi_page_visit_recorded')) {
+    if (!PREFER_STATIC_DATA && !window.sessionStorage.getItem('taigi_page_visit_recorded')) {
       window.sessionStorage.setItem('taigi_page_visit_recorded', '1');
       axios.post('/stats/action', {
         action: 'page_visit',
@@ -2484,11 +2517,17 @@ function App() {
           message.error('登入連結無效或已過期');
         });
     } else {
-      loadAuth().catch(() => {
+      if (PREFER_STATIC_DATA) {
         setAuth({ authenticated: false, is_admin: false, email: null, token_required: true, loopback_only: false });
-      });
+      } else {
+        loadAuth().catch(() => {
+          setAuth({ authenticated: false, is_admin: false, email: null, token_required: true, loopback_only: false });
+        });
+      }
     }
-    loadInfo().catch(() => undefined);
+    if (!PREFER_STATIC_DATA) {
+      loadInfo().catch(() => undefined);
+    }
     setLexiconQuery('');
     loadWords('').catch(() => undefined);
     loadStats().catch(() => undefined);
@@ -2497,6 +2536,10 @@ function App() {
   useEffect(() => {
     if (auth === null) return;
     loadJobs();
+    if (!signedIn) {
+      const clockTimer = window.setInterval(() => setNowSeconds(Date.now() / 1000), 1000);
+      return () => window.clearInterval(clockTimer);
+    }
     loadQueueStatus().catch(() => undefined);
     loadStats().catch(() => undefined);
     const jobsTimer = window.setInterval(loadJobs, 2500);
@@ -4537,7 +4580,7 @@ function App() {
                                     <Input placeholder="留空使用環境變數或 default profile" />
                                   </Form.Item>
                                   <Form.Item label="Public CDN URL" name="object_storage_public_url">
-                                    <Input placeholder="https://static.taigi.yihua.app" />
+                                    <Input placeholder="https://static-taigi.yihua.app" />
                                   </Form.Item>
                                   <Flex gap={10} wrap>
                                     <Button onClick={syncStaticStorage} loading={syncingStatic}>

@@ -26,6 +26,7 @@ from typing import Annotated, Callable, Literal, Optional
 from urllib.parse import quote, urlencode
 
 from fastapi import Cookie, FastAPI, Form, Header, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response as FastAPIResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageDraw, ImageFont
@@ -151,6 +152,19 @@ ADMIN_SESSION_COOKIE = "taigi_admin_session"
 REVIEWER_COOKIE = "taigi_reviewer_id"
 ADMIN_EMAIL = (os.environ.get("TAIGI_WEB_ADMIN_EMAIL") or os.environ.get("ADMIN_EMAIL") or "yihua1218@gmail.com").strip().lower()
 PUBLIC_URL = os.environ.get("TAIGI_WEB_PUBLIC_URL") or os.environ.get("PUBLIC_URL") or "https://taigi.yihua.app"
+CORS_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in os.environ.get(
+        "TAIGI_WEB_CORS_ORIGINS",
+        ",".join([
+            PUBLIC_URL,
+            "https://xn--kpr858j.yihua.app",
+            "http://localhost:5173",
+            "http://127.0.0.1:5174",
+        ]),
+    ).split(",")
+    if origin.strip()
+]
 AUTH_STORE = JOB_ROOT / "auth_store.json"
 MAGIC_LINK_TTL_SECONDS = int(os.environ.get("TAIGI_WEB_MAGIC_LINK_TTL_SECONDS", "900"))
 SESSION_TTL_SECONDS = int(os.environ.get("TAIGI_WEB_SESSION_TTL_SECONDS", str(60 * 60 * 24 * 30)))
@@ -1958,6 +1972,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Taigi Voice Video Web", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 if (FRONTEND_DIST / "assets").exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
