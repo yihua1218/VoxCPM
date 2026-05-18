@@ -1774,13 +1774,13 @@ const statusColor: Record<JobStatus, string> = {
 };
 
 const pipelineSteps = [
-  { key: 'translate', label: '翻譯', color: '#1677ff', match: ['Translating'] },
-  { key: 'segment', label: '分段', color: '#13a8a8', match: ['Splitting', 'Loading source'] },
-  { key: 'tts', label: '語音', color: '#722ed1', match: ['Generating audio', 'Regenerating audio'] },
-  { key: 'join', label: '合併', color: '#eb2f96', match: ['Joining'] },
-  { key: 'subtitle', label: '字幕', color: '#fa8c16', match: ['Preparing'] },
-  { key: 'video', label: '影片', color: '#52c41a', match: ['Rendering'] },
-  { key: 'package', label: '打包', color: '#faad14', match: ['Packaging'] },
+  { key: 'translate', label: '翻譯', color: '#1b63f0', match: ['Translating'] },
+  { key: 'segment', label: '分段', color: '#21c8c1', match: ['Splitting', 'Loading source'] },
+  { key: 'tts', label: '語音', color: '#19b795', match: ['Generating audio', 'Regenerating audio'] },
+  { key: 'join', label: '合併', color: '#5d86f7', match: ['Joining'] },
+  { key: 'subtitle', label: '字幕', color: '#6c4be8', match: ['Preparing'] },
+  { key: 'video', label: '影片', color: '#59c36a', match: ['Rendering'] },
+  { key: 'package', label: '打包', color: '#23b7d5', match: ['Packaging'] },
 ];
 const ratingScores = [5, 4, 3, 2, 1] as const;
 
@@ -2198,7 +2198,7 @@ function App() {
   const visibleSegments = selectedJob?.id === segmentJobId ? segments : [];
   const selectedMedia = useMemo(() => new URLSearchParams(window.location.search).get('media') ?? '', []);
   const jobMediaSrc = (job: Job, kind: 'audio' | 'video' | 'zip' | 'taigi' | 'tailo' | 'segments') => (
-    job.static_media?.[kind] || `/jobs/${job.id}/download/${kind}`
+    job.static_media?.[kind] || `/jobs/${job.id}/media/${kind}`
   );
   const jobDownloadSrc = (job: Job, kind: 'audio' | 'video' | 'zip' | 'taigi' | 'tailo' | 'segments') => (
     `/jobs/${job.id}/download/${kind}`
@@ -3543,18 +3543,21 @@ function App() {
       theme={{
         token: {
           fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif",
-          colorPrimary: '#0071e3',
+          colorPrimary: '#1b63f0',
           borderRadius: 12,
+          colorText: '#092764',
+          colorTextSecondary: '#66728a',
+          colorBorder: '#d9e7f6',
           colorBgContainer: '#ffffff',
-          colorBgLayout: '#f5f5f7',
+          colorBgLayout: '#f4fbff',
         },
         components: {
           Layout: {
-            headerBg: 'rgba(255, 255, 255, 0.8)',
-            headerColor: '#1d1d1f',
+            headerBg: 'rgba(255, 255, 255, 0.78)',
+            headerColor: '#092764',
           },
           Card: {
-            boxShadowTertiary: '0 4px 12px rgba(0,0,0,0.05)',
+            boxShadowTertiary: '0 10px 26px rgba(7,39,96,0.08)',
           },
         },
       }}
@@ -3896,7 +3899,7 @@ function App() {
                               <Text strong>影片播放</Text>
                               <video
                                 controls
-                                preload="metadata"
+                                preload="none"
                                 src={jobMediaSrc(selectedJob, 'video')}
                               />
                               <Space size={8} wrap className="share-actions">
@@ -5357,7 +5360,7 @@ function App() {
                                     {job.play_count ? ` · 播放 ${job.play_count} 次` : ''}
                                   </Text>
                                 </button>
-                                {job.status === 'complete' && (
+                                {job.status === 'complete' && selectedJob?.id === job.id && (
                                   <div className="job-row-actions">
                                     {(job.audio_path || job.video_path) && (
                                       <div className="job-row-media">
@@ -5370,7 +5373,7 @@ function App() {
                                         {job.video_path && (
                                           <div className="job-inline-player">
                                             <Text type="secondary">影片</Text>
-                                            <video controls preload="metadata" src={jobMediaSrc(job, 'video')} />
+                                            <video controls preload="none" src={jobMediaSrc(job, 'video')} />
                                           </div>
                                         )}
                                       </div>
@@ -5449,7 +5452,7 @@ function App() {
             </div>
         </Content>
 
-        <Footer style={{ textAlign: 'center', color: '#6e6e73' }}>
+        <Footer style={{ textAlign: 'center', color: '#66728a' }}>
           Private local tool for VoxCPM Taiwanese Hokkien voice/video generation.
         </Footer>
       </Layout>

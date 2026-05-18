@@ -6433,6 +6433,26 @@ async def download_job_file(
     return FileResponse(path, headers={"Content-Disposition": content_disposition(job_download_filename(job, kind, path))})
 
 
+@app.get("/jobs/{job_id}/media/{kind}")
+async def media_job_file(
+    job_id: str,
+    kind: Literal["audio", "video"],
+    request: Request,
+    taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
+):
+    job = app_data["jobs"].get(job_id)
+    require_job_access(job, request, taigi_web_token_cookie, authorization)
+    if job.status != "complete":
+        raise HTTPException(status_code=409, detail="Job is not complete")
+    path = Path((job.audio_path if kind == "audio" else job.video_path) or "")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Output file not found")
+    media_type = "audio/wav" if kind == "audio" else "video/mp4"
+    increment_play(kind, "job", job_id)
+    return FileResponse(path, media_type=media_type)
+
+
 @app.get("/jobs/{job_id}/segments/{segment_index}/audio")
 async def download_segment_audio(
     job_id: str,

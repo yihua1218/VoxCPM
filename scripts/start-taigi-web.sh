@@ -3,6 +3,8 @@ set -euo pipefail
 
 cd /Users/yihua/workspace/voxcpm-project/VoxCPM
 
+ulimit -n 4096
+
 if [ -f /Users/yihua/workspace/ai-mail-butler/.env ]; then
   set -a
   source /Users/yihua/workspace/ai-mail-butler/.env
