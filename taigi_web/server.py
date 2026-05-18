@@ -8,6 +8,7 @@ import smtplib
 import shutil
 import subprocess
 import time
+import traceback
 import urllib.error
 import urllib.request
 import uuid
@@ -1417,6 +1418,11 @@ def run_word_asset_job(job_id: str):
         db.setdefault("words", {})[word_id] = generated
         save_word_db(db)
         completed_at = time.time()
+        onedrive_dir = copy_job_outputs_to_onedrive(
+            job_id,
+            job.title,
+            WORD_ASSET_DIR / word_id / "assets" / asset["id"],
+        )
         jobs.update(
             job_id,
             status="complete",
@@ -1427,6 +1433,7 @@ def run_word_asset_job(job_id: str):
             output_dir=str(WORD_ASSET_DIR / word_id / "assets" / asset["id"]),
             audio_path=asset.get("audio_path"),
             video_path=asset.get("video_path"),
+            onedrive_dir=str(onedrive_dir) if onedrive_dir else None,
             taigi_text=generated.get("taigi", ""),
             tailo_text=generated.get("tailo", ""),
             metadata={**job.metadata, "asset_id": asset.get("id"), "synthesis_text": asset.get("synthesis_text"), "synthesis_source": asset.get("synthesis_source")},
@@ -1507,6 +1514,13 @@ def run_segment_regeneration_job(job_id: str):
             zip_path=str(zip_path),
             error=None,
         )
+        source_onedrive_dir = copy_job_outputs_to_onedrive(
+            source_job_id,
+            updated_source.title,
+            output_dir_for_job(updated_source),
+        )
+        if source_onedrive_dir:
+            updated_source = jobs.update(source_job_id, onedrive_dir=str(source_onedrive_dir))
         for segment in regenerated:
             record_stat_action("regenerate_segment", "segment", f"{source_job_id}:{segment.get('index')}")
         if len(regenerated) > 1:
@@ -1525,6 +1539,7 @@ def run_segment_regeneration_job(job_id: str):
             audio_path=updated_source.audio_path,
             video_path=updated_source.video_path,
             zip_path=updated_source.zip_path,
+            onedrive_dir=updated_source.onedrive_dir,
             taigi_text=taigi_text,
             tailo_text=tailo_text,
             metadata={**job.metadata, "completed_source_job_id": source_job_id},
@@ -1760,6 +1775,7 @@ def run_audio_review_job(job_id: str):
         }
         save_state_json_file(output_dir / "audio_review.json", report)
         save_state_json_file(source_output_dir / "audio_review.json", report)
+        onedrive_dir = copy_job_outputs_to_onedrive(job_id, job.title, output_dir)
         jobs.update(
             job_id,
             status="complete",
@@ -1768,6 +1784,7 @@ def run_audio_review_job(job_id: str):
             completed_at=completed_at,
             elapsed_seconds=round(completed_at - started_at, 3),
             output_dir=str(output_dir),
+            onedrive_dir=str(onedrive_dir) if onedrive_dir else None,
             metadata={**job.metadata, "summary": report["summary"]},
         )
         record_stat_action("audio_review_complete", "job", source_job.id, metadata=report["summary"])
@@ -1799,6 +1816,23 @@ def job_worker():
                 run_audio_review_job(job_id)
             elif payload:
                 run_job(job_id, payload)
+        except Exception as exc:
+            print(f"Job worker caught unhandled exception for {job_id}: {exc}", flush=True)
+            traceback.print_exc()
+            try:
+                job = app_data["jobs"].get(job_id)
+                if job and job.status in {"queued", "running"}:
+                    app_data["jobs"].update(
+                        job_id,
+                        status="failed",
+                        stage="Failed",
+                        progress=100,
+                        error=f"Unhandled worker error: {exc}",
+                        completed_at=time.time(),
+                    )
+            except Exception as update_exc:
+                print(f"Job worker could not mark {job_id} failed: {update_exc}", flush=True)
+                traceback.print_exc()
         finally:
             job_queue.task_done()
 
@@ -2666,6 +2700,7 @@ def present_job(job: Job, admin: bool, user_id: str = ""):
         payload = job.model_dump()
         for key in ("owner_id", "output_dir", "audio_path", "zip_path", "onedrive_dir"):
             payload.pop(key, None)
+        payload["audio_path"] = "available" if job.audio_path else None
         payload["video_path"] = "available" if job.video_path else None
         if isinstance(payload.get("metadata"), dict):
             payload["metadata"] = {
@@ -3849,8 +3884,10 @@ def word_kind(source: str) -> str:
     return "phrase" if len(source) >= 4 else "word"
 
 
+LEXICON_MIN_COMPACT_CHARS = 2
 LEXICON_MAX_COMPACT_CHARS = 36
 LEXICON_SENTENCE_MAX_COMPACT_CHARS = 24
+LEXICON_SINGLE_TOKEN_STOP_CHARS = set("我的你他她它了是在和與及或也都很更最就又還聽看說講用把被讓給有無不沒會能可對從到以於")
 
 
 def lexicon_compact_source(source: str) -> str:
@@ -3864,7 +3901,7 @@ def lexicon_sentence_mark_count(source: str) -> int:
 def is_lexicon_material(source: str) -> bool:
     text = (source or "").strip()
     compact = lexicon_compact_source(text)
-    if not compact:
+    if len(compact) < LEXICON_MIN_COMPACT_CHARS:
         return False
     if "\n" in text or "\r" in text:
         return False
@@ -4126,13 +4163,45 @@ def tokenize_chinese(text: str) -> list[str]:
         protected.extend(list(jieba.cut(chunk, cut_all=False)) if jieba else re.findall(r"[\u4e00-\u9fff]{1,4}|[A-Za-z0-9]+", chunk))
         idx = end
     raw_words = protected
+    raw_words = merge_short_lexicon_tokens(raw_words)
     words = []
     for word in raw_words:
         word = word.strip()
         if not word or re.fullmatch(r"[，。！？、；：,.!?;:「」『』（）()]+", word):
             continue
-        words.append(word)
+        if is_lexicon_material(word):
+            words.append(word)
     return words
+
+
+def merge_short_lexicon_tokens(tokens: list[str]) -> list[str]:
+    merged: list[str] = []
+    carry = ""
+    punctuation = re.compile(r"^[，。！？、；：,.!?;:「」『』（）()]+$")
+    for token in tokens:
+        token = str(token or "").strip()
+        if not token:
+            continue
+        if punctuation.fullmatch(token):
+            carry = ""
+            continue
+        compact_len = len(lexicon_compact_source(token))
+        if compact_len < LEXICON_MIN_COMPACT_CHARS:
+            if token in LEXICON_SINGLE_TOKEN_STOP_CHARS:
+                carry = ""
+                continue
+            if carry:
+                merged.append(f"{carry}{token}")
+                carry = ""
+            else:
+                carry = token
+            continue
+        if carry:
+            merged.append(f"{carry}{token}")
+            carry = ""
+        else:
+            merged.append(token)
+    return merged
 
 
 def make_word_background(path: Path, title: str, tailo_text: str = ""):
@@ -4559,14 +4628,45 @@ def make_archive(job_dir: Path) -> Path:
     return zip_path
 
 
-def copy_to_onedrive(paths: list[Path]) -> Optional[Path]:
-    dest = Path.home() / "Library" / "CloudStorage" / "OneDrive-Personal" / "Codex-VoxCPM-Taigi-Web"
-    if not dest.parent.exists():
+def onedrive_root() -> Path:
+    return Path.home() / "Library" / "CloudStorage" / "OneDrive-Personal" / "Codex-VoxCPM-Taigi-Web"
+
+
+def safe_onedrive_name(value: str, fallback: str = "job") -> str:
+    value = re.sub(r"[\\/:*?\"<>|]+", "-", value.strip())
+    value = re.sub(r"\s+", " ", value).strip(" .")
+    return (value or fallback)[:80]
+
+
+def copy_file_if_changed(source: Path, target: Path):
+    if target.exists():
+        source_stat = source.stat()
+        target_stat = target.stat()
+        if target_stat.st_size == source_stat.st_size and target_stat.st_mtime >= source_stat.st_mtime:
+            return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+
+
+def copy_job_outputs_to_onedrive(job_id: str, title: str, output_dir: Path, extra_paths: Optional[list[Path]] = None) -> Optional[Path]:
+    root = onedrive_root()
+    if not root.parent.exists():
         return None
+    dest = root / f"{job_id}-{safe_onedrive_name(title)}"
     dest.mkdir(parents=True, exist_ok=True)
-    for path in paths:
-        if path.exists():
-            shutil.copy2(path, dest / path.name)
+    if output_dir.exists():
+        for path in output_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(output_dir)
+            target = dest / relative
+            copy_file_if_changed(path, target)
+    for path in extra_paths or []:
+        if not path.exists() or not path.is_file():
+            continue
+        target = dest / path.name
+        if path.resolve() != target.resolve():
+            copy_file_if_changed(path, target)
     return dest
 
 
@@ -4879,19 +4979,7 @@ def run_job(job_id: str, payload: CreateJobRequest):
 
         jobs.update(job_id, stage="Packaging outputs", progress=94)
         zip_path = make_archive(output_dir)
-        onedrive_dir = None
-        if payload.copy_to_onedrive:
-            paths = [
-                audio_path,
-                output_dir / "taigi_draft.txt",
-                output_dir / "tailo.txt",
-                output_dir / "subtitles.json",
-                output_dir / "segments.json",
-                zip_path,
-            ]
-            if video_path:
-                paths.append(video_path)
-            onedrive_dir = copy_to_onedrive(paths)
+        onedrive_dir = copy_job_outputs_to_onedrive(job_id, payload.title, output_dir)
 
         completed_at = time.time()
         jobs.update(
