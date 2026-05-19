@@ -1,5 +1,6 @@
 import json
 import os
+import copy
 import random
 import re
 import secrets
@@ -72,18 +73,54 @@ def load_env_file(path: Path):
 
 load_env_file(ROOT / ".env")
 
-JOB_ROOT = Path(os.environ.get("TAIGI_WEB_JOB_DIR", ROOT / "taigi_web_jobs"))
-FRONTEND_DIST = Path(os.environ.get("TAIGI_WEB_FRONTEND_DIST", ROOT / "taigi_web" / "frontend" / "dist"))
-CACHE_DIR = Path(os.environ.get("TAIGI_WEB_MODEL_CACHE", ROOT / "pretrained_models" / "hf-cache"))
-DEFAULT_REFERENCE_AUDIO = Path(os.environ.get("TAIGI_WEB_REFERENCE_AUDIO", ROOT / "outputs" / "taigi_full_segments" / "seg_02.wav"))
+
+def env_path(name: str, default: Path) -> Path:
+    value = os.environ.get(name, "").strip()
+    return Path(value) if value else default
+
+
+def cached_api_response(cache_key: str) -> Optional[dict]:
+    now = time.time()
+    with api_response_cache_lock:
+        cached = api_response_cache.get(cache_key)
+        if not cached:
+            return None
+        expires_at, payload = cached
+        if expires_at <= now:
+            api_response_cache.pop(cache_key, None)
+            return None
+        return copy.deepcopy(payload)
+
+
+def store_api_response(cache_key: str, payload: dict) -> dict:
+    now = time.time()
+    with api_response_cache_lock:
+        if len(api_response_cache) > 512:
+            expired_keys = [
+                key for key, (expires_at, _) in api_response_cache.items()
+                if expires_at <= now
+            ]
+            for key in expired_keys:
+                api_response_cache.pop(key, None)
+        api_response_cache[cache_key] = (
+            now + API_RESPONSE_CACHE_TTL_SECONDS,
+            copy.deepcopy(payload),
+        )
+    return payload
+
+
+JOB_ROOT = env_path("TAIGI_WEB_JOB_DIR", ROOT / "taigi_web_jobs")
+FRONTEND_DIST = env_path("TAIGI_WEB_FRONTEND_DIST", ROOT / "taigi_web" / "frontend" / "dist")
+CACHE_DIR = env_path("TAIGI_WEB_MODEL_CACHE", ROOT / "pretrained_models" / "hf-cache")
+DEFAULT_REFERENCE_AUDIO = env_path("TAIGI_WEB_REFERENCE_AUDIO", ROOT / "outputs" / "taigi_full_segments" / "seg_02.wav")
 FFMPEG = os.environ.get("TAIGI_WEB_FFMPEG") or shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
 FFPROBE = os.environ.get("TAIGI_WEB_FFPROBE") or shutil.which("ffprobe") or "/opt/homebrew/bin/ffprobe"
 VOXCPM_BIN = os.environ.get("TAIGI_WEB_VOXCPM_BIN") or shutil.which("voxcpm") or str(ROOT / ".venv" / "bin" / "voxcpm")
 DEFAULT_DEVICE = os.environ.get("TAIGI_WEB_DEFAULT_DEVICE", "mps")
 DEFAULT_COPY_TO_ONEDRIVE = os.environ.get("TAIGI_WEB_COPY_TO_ONEDRIVE", "1").lower() not in {"0", "false", "no", "off"}
-TRANSLATION_MEMORY = Path(os.environ.get("TAIGI_WEB_TRANSLATION_MEMORY", JOB_ROOT / "translation_memory.json"))
-WORD_DB = Path(os.environ.get("TAIGI_WEB_WORD_DB", JOB_ROOT / "word_db.json"))
-WORD_ASSET_DIR = Path(os.environ.get("TAIGI_WEB_WORD_ASSET_DIR", JOB_ROOT / "word_assets"))
+TRANSLATION_MEMORY = env_path("TAIGI_WEB_TRANSLATION_MEMORY", JOB_ROOT / "translation_memory.json")
+WORD_DB = env_path("TAIGI_WEB_WORD_DB", JOB_ROOT / "word_db.json")
+WORD_ASSET_DIR = env_path("TAIGI_WEB_WORD_ASSET_DIR", JOB_ROOT / "word_assets")
 WORD_AUTO_GENERATE_INTERVAL_SECONDS = int(os.environ.get("TAIGI_WEB_WORD_AUTO_GENERATE_INTERVAL_SECONDS", "1800"))
 ENABLE_BREEZE_ASR = os.environ.get("TAIGI_WEB_ENABLE_BREEZE_ASR", "0").lower() in {"1", "true", "yes", "on"}
 BREEZE_ASR_MODEL = os.environ.get("TAIGI_WEB_BREEZE_ASR_MODEL", "MediaTek-Research/Breeze-ASR-26").strip()
@@ -95,9 +132,9 @@ COMMAND_HEARTBEAT_SECONDS = int(os.environ.get("TAIGI_WEB_COMMAND_HEARTBEAT_SECO
 RUNNING_JOB_STALE_SECONDS = int(os.environ.get("TAIGI_WEB_RUNNING_JOB_STALE_SECONDS", "1800"))
 JOB_WATCHDOG_INTERVAL_SECONDS = int(os.environ.get("TAIGI_WEB_JOB_WATCHDOG_INTERVAL_SECONDS", "60"))
 DATA_CLEANUP_INTERVAL_SECONDS = int(os.environ.get("TAIGI_WEB_DATA_CLEANUP_INTERVAL_SECONDS", "86400"))
-STATS_PATH = Path(os.environ.get("TAIGI_WEB_STATS", JOB_ROOT / "stats.json"))
-SQLITE_DB = Path(os.environ.get("TAIGI_WEB_SQLITE_DB", JOB_ROOT / "taigi_web.sqlite3"))
-PUBLIC_STATIC_DIR = Path(os.environ.get("TAIGI_WEB_PUBLIC_STATIC_DIR", JOB_ROOT / "public_static"))
+STATS_PATH = env_path("TAIGI_WEB_STATS", JOB_ROOT / "stats.json")
+SQLITE_DB = env_path("TAIGI_WEB_SQLITE_DB", JOB_ROOT / "taigi_web.sqlite3")
+PUBLIC_STATIC_DIR = env_path("TAIGI_WEB_PUBLIC_STATIC_DIR", JOB_ROOT / "public_static")
 PUBLIC_STATIC_URL = os.environ.get("TAIGI_WEB_PUBLIC_STATIC_URL", "/static-data").rstrip("/")
 
 UNSAFE_TTS_CHARS = {
@@ -177,6 +214,9 @@ db_lock = Lock()
 snapshot_lock = Lock()
 snapshot_scheduled = False
 rate_limit_seen: dict[str, float] = {}
+api_response_cache: dict[str, tuple[float, dict]] = {}
+api_response_cache_lock = Lock()
+API_RESPONSE_CACHE_TTL_SECONDS = 30
 job_queue: PriorityQueue = PriorityQueue()
 job_counter_lock = Lock()
 job_counter = 0
@@ -368,6 +408,7 @@ class WordAssetRatingRequest(BaseModel):
 
 class WordGenerateRequest(BaseModel):
     synthesis_source: Literal["taigi", "tailo"] = "taigi"
+    make_video: bool = False
 
 
 class WordItaigiReferenceApplyRequest(BaseModel):
@@ -1211,7 +1252,7 @@ def word_job_position(word_id: str) -> int:
 
 
 def word_generation_status(word: dict) -> dict:
-    status = word.get("generation_status") or ("complete" if word.get("has_audio") and word.get("has_video") else "idle")
+    status = word.get("generation_status") or ("complete" if word.get("has_audio") else "idle")
     position = word_job_position(word.get("id", "")) if status == "queued" else 0
     return {
         "generation_status": status,
@@ -1237,10 +1278,10 @@ def mark_word_generation(word_id: str, **patch):
 
 
 def word_has_generated_asset(word: dict) -> bool:
-    if word.get("has_audio") and word.get("has_video"):
+    if word.get("has_audio"):
         return True
     for asset in word.get("assets") or []:
-        if asset.get("has_audio") and asset.get("has_video"):
+        if asset.get("has_audio"):
             return True
     return False
 
@@ -1262,6 +1303,7 @@ def enqueue_word_generation_job(
     auto: bool = False,
     priority: int = 5,
     synthesis_source: str = "taigi",
+    make_video: bool = False,
 ) -> tuple[dict, Optional[Job]]:
     db = load_word_db()
     word = db.get("words", {}).get(word_id)
@@ -1290,6 +1332,7 @@ def enqueue_word_generation_job(
         "generation_requester_name": requester_name,
         "generation_auto": auto,
         "generation_synthesis_source": synthesis_source,
+        "generation_make_video": bool(make_video),
         "generation_updated_at": now,
         "updated_at": now,
     })
@@ -1318,6 +1361,7 @@ def enqueue_word_generation_job(
             "requester_name": requester_name,
             "auto": auto,
             "synthesis_source": synthesis_source,
+            "make_video": bool(make_video),
         },
     )
     app_data["jobs"].add(job)
@@ -1416,15 +1460,17 @@ def run_word_asset_job(job_id: str):
             cfg_value=2.5,
             generated_by_id=requester_id,
             generated_by_name=requester_name,
+            make_video=bool(job.metadata.get("make_video") or word.get("generation_make_video")),
         )
-        jobs.update(job_id, stage="Rendering word video", progress=80)
+        make_video = bool(job.metadata.get("make_video") or word.get("generation_make_video"))
         generated.update({
             "generation_status": "complete",
-            "generation_stage": "詞語語音與影片已完成",
+            "generation_stage": "詞語語音已完成" if not make_video else "詞語語音與影片已完成",
             "generation_progress": 100,
             "generation_error": "",
             "generation_job_id": job_id,
             "generation_synthesis_source": "",
+            "generation_make_video": False,
             "generation_updated_at": time.time(),
             "updated_at": time.time(),
         })
@@ -2425,6 +2471,29 @@ def authenticated_email(request: Request) -> Optional[str]:
 
 def is_authenticated(request: Request) -> bool:
     return bool(authenticated_email(request))
+
+
+def api_cache_subject(request: Request, admin_or_token: bool = False) -> str:
+    email = authenticated_email(request)
+    if email:
+        return f"email:{email.lower()}"
+    reviewer = request.cookies.get(REVIEWER_COOKIE, "")
+    if reviewer and re.fullmatch(r"[a-f0-9]{32}", reviewer):
+        return f"anon:{reviewer}"
+    if admin_or_token:
+        return "admin_or_token"
+    return f"public:{client_ip(request) or 'unknown'}"
+
+
+def api_cache_key(request: Request, endpoint: str, *parts: object, admin_or_token: bool = False) -> str:
+    normalized_parts = "|".join(str(part) for part in parts)
+    return "|".join([
+        endpoint,
+        api_cache_subject(request, admin_or_token),
+        f"admin={int(admin_or_token)}",
+        f"private={int(is_private_client(request))}",
+        normalized_parts,
+    ])
 
 
 def require_email_login(request: Request) -> str:
@@ -4291,19 +4360,19 @@ def generate_word_video(word_dir: Path, title: str, audio_path: Path, tailo_text
     return video_path
 
 
-def generate_word_assets(word: dict, voice_mode: str, voice_control: str, device: str, timesteps: int, cfg_value: float, force: bool = False) -> dict:
+def generate_word_assets(word: dict, voice_mode: str, voice_control: str, device: str, timesteps: int, cfg_value: float, force: bool = False, make_video: bool = False) -> dict:
     word_dir = WORD_ASSET_DIR / word["id"]
     word_dir.mkdir(parents=True, exist_ok=True)
     audio_path = word_dir / "word.wav"
     video_path = word_dir / "word.mp4"
-    needs_regen = force or word.get("problem") or not audio_path.exists() or not video_path.exists()
+    needs_regen = force or word.get("problem") or not audio_path.exists() or (make_video and not video_path.exists())
     if not needs_regen:
         return {
             **word,
             "audio_path": str(audio_path),
-            "video_path": str(video_path),
+            "video_path": str(video_path) if video_path.exists() else word.get("video_path", ""),
             "has_audio": True,
-            "has_video": True,
+            "has_video": video_path.exists(),
         }
 
     synthesis_text, synthesis_source = word_synthesis_text(word)
@@ -4316,13 +4385,14 @@ def generate_word_assets(word: dict, voice_mode: str, voice_control: str, device
         timesteps,
         cfg_value,
     )
-    generated_video = generate_word_video(word_dir, word["taigi"], audio_path, word.get("tailo", ""))
-    if generated_video != video_path:
-        shutil.move(generated_video, video_path)
+    if make_video:
+        generated_video = generate_word_video(word_dir, word["taigi"], audio_path, word.get("tailo", ""))
+        if generated_video != video_path:
+            shutil.move(generated_video, video_path)
     return {
         **word,
         "audio_path": str(audio_path),
-        "video_path": str(video_path),
+        "video_path": str(video_path) if video_path.exists() else "",
         "has_audio": audio_path.exists(),
         "has_video": video_path.exists(),
         "problem": False,
@@ -4414,7 +4484,7 @@ def public_word_assets(word: dict, user_id: str = "") -> list[dict]:
     return public_assets
 
 
-def generate_word_asset_variant(word: dict, voice_mode: str, voice_control: str, device: str, timesteps: int, cfg_value: float, generated_by_id: str, generated_by_name: str) -> tuple[dict, dict]:
+def generate_word_asset_variant(word: dict, voice_mode: str, voice_control: str, device: str, timesteps: int, cfg_value: float, generated_by_id: str, generated_by_name: str, make_video: bool = False) -> tuple[dict, dict]:
     asset_id = f"asset-{uuid.uuid4().hex[:12]}"
     word_dir = WORD_ASSET_DIR / word["id"] / "assets" / asset_id
     word_dir.mkdir(parents=True, exist_ok=True)
@@ -4430,13 +4500,14 @@ def generate_word_asset_variant(word: dict, voice_mode: str, voice_control: str,
         timesteps,
         cfg_value,
     )
-    generated_video = generate_word_video(word_dir, word["taigi"], audio_path, word.get("tailo", ""))
-    if generated_video != video_path:
-        shutil.move(generated_video, video_path)
+    if make_video:
+        generated_video = generate_word_video(word_dir, word["taigi"], audio_path, word.get("tailo", ""))
+        if generated_video != video_path:
+            shutil.move(generated_video, video_path)
     asset = {
         "id": asset_id,
         "audio_path": str(audio_path),
-        "video_path": str(video_path),
+        "video_path": str(video_path) if video_path.exists() else "",
         "has_audio": audio_path.exists(),
         "has_video": video_path.exists(),
         "duration": generated_duration,
@@ -4450,7 +4521,7 @@ def generate_word_asset_variant(word: dict, voice_mode: str, voice_control: str,
     updated = {
         **word,
         "audio_path": str(audio_path),
-        "video_path": str(video_path),
+        "video_path": str(video_path) if video_path.exists() else "",
         "has_audio": audio_path.exists(),
         "has_video": video_path.exists(),
         "problem": False,
@@ -5293,6 +5364,10 @@ async def api_status(
 ):
     private_client = is_private_client(request)
     admin_or_token = is_authorized(request, taigi_web_token_cookie, authorization)
+    cache_key = api_cache_key(request, "api_status", admin_or_token=admin_or_token)
+    cached = cached_api_response(cache_key)
+    if cached is not None:
+        return cached
     rate_state = {
         "limit_seconds": max(60, int(load_settings().public_rate_limit_seconds)),
         "wait_seconds": 0,
@@ -5301,20 +5376,28 @@ async def api_status(
         "sentence_limit": None,
         "max_chars": PUBLIC_ANONYMOUS_MAX_CHARS,
     } if admin_or_token or private_client or is_authenticated(request) else public_rate_limit_state(request)
-    return {
+    payload = {
         "authenticated": admin_or_token or is_authenticated(request),
         "private_client": private_client,
         "rate_limit": rate_state,
         "queue": queue_status(),
     }
+    return store_api_response(cache_key, payload)
 
 
 @app.get("/words")
 async def search_words(
     request: Request,
     q: str = "",
-    limit: int = 50,
+    limit: int = 10,
+    offset: int = 0,
 ):
+    page_limit = max(1, min(limit, 100))
+    page_offset = max(0, offset)
+    cache_key = api_cache_key(request, "words", q.strip().lower(), page_limit, page_offset)
+    cached = cached_api_response(cache_key)
+    if cached is not None:
+        return cached
     remember_word_query(q)
     db = load_word_db()
     query = q.strip().lower()
@@ -5342,10 +5425,19 @@ async def search_words(
         ),
         reverse=True,
     )
+    total = len(items)
+    page_items = items[page_offset: page_offset + page_limit]
     public_items = []
-    for item in items[: max(1, min(limit, 200))]:
+    for item in page_items:
         public_items.append(public_word_entry(item, stats_words, user_id))
-    return {"words": public_items, "total": len(items)}
+    payload = {
+        "words": public_items,
+        "total": total,
+        "limit": page_limit,
+        "offset": page_offset,
+        "has_more": page_offset + len(page_items) < total,
+    }
+    return store_api_response(cache_key, payload)
 
 
 @app.get("/stats")
@@ -5448,7 +5540,13 @@ async def rate_word(word_id: str, payload: WordRatingRequest, request: Request, 
 @app.post("/words/{word_id}/generate")
 async def generate_word_asset_endpoint(word_id: str, payload: WordGenerateRequest, request: Request, response: Response):
     user_id = review_user_id(request, response)
-    word, job = enqueue_word_generation_job(word_id, user_id, reviewer_display_name(user_id), synthesis_source=payload.synthesis_source)
+    word, job = enqueue_word_generation_job(
+        word_id,
+        user_id,
+        reviewer_display_name(user_id),
+        synthesis_source=payload.synthesis_source,
+        make_video=payload.make_video,
+    )
     admin_or_token = is_authorized(request, None, None)
     return {
         "queued": True,
@@ -5471,6 +5569,51 @@ async def generate_word_asset_endpoint(word_id: str, payload: WordGenerateReques
             )
         },
     }
+
+
+@app.post("/words/{word_id}/assets/{asset_id}/video")
+async def generate_word_asset_video_endpoint(word_id: str, asset_id: str):
+    db = load_word_db()
+    word = db.get("words", {}).get(word_id)
+    if not word:
+        raise HTTPException(status_code=404, detail={"message": "找不到這個詞語。"})
+    assets = list(word.get("assets") or [])
+    if asset_id == "legacy":
+        asset = {
+            "id": "legacy",
+            "audio_path": word.get("audio_path"),
+            "video_path": word.get("video_path"),
+            "has_audio": bool(word.get("has_audio")),
+            "has_video": bool(word.get("has_video")),
+        }
+    else:
+        asset = next((item for item in assets if item.get("id") == asset_id), None)
+    if not asset:
+        raise HTTPException(status_code=404, detail={"message": "找不到這筆詞語語音。"})
+    audio_path = Path(asset.get("audio_path") or "")
+    if not audio_path.exists() or WORD_ASSET_DIR not in audio_path.parents:
+        raise HTTPException(status_code=404, detail={"message": "這筆詞語語音還沒有可用的 wav 音訊。"})
+    word_dir = audio_path.parent
+    video_path = word_dir / "word.mp4"
+    if not video_path.exists():
+        generated_video = generate_word_video(word_dir, word.get("taigi") or word.get("source") or "", audio_path, word.get("tailo", ""))
+        if generated_video != video_path:
+            shutil.move(generated_video, video_path)
+    asset["video_path"] = str(video_path)
+    asset["has_video"] = video_path.exists()
+    if asset_id == "legacy":
+        word["video_path"] = str(video_path)
+        word["has_video"] = video_path.exists()
+    else:
+        word["assets"] = [asset if item.get("id") == asset_id else item for item in assets]
+        if word.get("audio_path") == asset.get("audio_path"):
+            word["video_path"] = str(video_path)
+            word["has_video"] = video_path.exists()
+    word["updated_at"] = time.time()
+    db["words"][word_id] = word
+    save_word_db(db)
+    record_stat_action("generate_word_video", "word_asset", f"{word_id}:{asset_id}")
+    return {"saved": True, "asset": public_word_assets(word)[0] if asset_id != "legacy" else asset}
 
 
 @app.get("/words/{word_id}/itaigi-reference")
@@ -5927,10 +6070,19 @@ async def create_job(
 @app.get("/jobs")
 async def list_jobs(
     request: Request,
+    q: str = "",
+    limit: int = 10,
+    offset: int = 0,
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
     authorization: Annotated[Optional[str], Header()] = None,
 ):
     admin_or_token = is_authorized(request, taigi_web_token_cookie, authorization)
+    page_limit = max(1, min(limit, 100))
+    page_offset = max(0, offset)
+    cache_key = api_cache_key(request, "jobs", q.strip().lower(), page_limit, page_offset, admin_or_token=admin_or_token)
+    cached = cached_api_response(cache_key)
+    if cached is not None:
+        return cached
     jobs = app_data["jobs"].list()
     if not admin_or_token:
         jobs = [job for job in jobs if job_is_public(job) or job_is_owned_by_request(job, request)]
@@ -5939,8 +6091,33 @@ async def list_jobs(
             key=job_sort_score,
             reverse=True,
         )
+    query = q.strip().lower()
+    if query:
+        jobs = [
+            job for job in jobs
+            if query in job.id.lower()
+            or query in (job.title or "").lower()
+            or query in (job.chinese_text or "").lower()
+            or query in (job.taigi_text or "").lower()
+            or query in (job.tailo_text or "").lower()
+            or query in (job.stage or "").lower()
+            or query in (job.error or "").lower()
+            or query in (job.status or "").lower()
+            or query in (job.kind or "").lower()
+            or query in (job.problem_reason or "").lower()
+            or query in (job.problem_type or "").lower()
+        ]
+    total = len(jobs)
+    page_jobs = jobs[page_offset: page_offset + page_limit]
     user_id = review_user_id(request)
-    return {"jobs": [present_job(job, admin_or_token, user_id) for job in jobs]}
+    payload = {
+        "jobs": [present_job(job, admin_or_token, user_id) for job in page_jobs],
+        "total": total,
+        "limit": page_limit,
+        "offset": page_offset,
+        "has_more": page_offset + len(page_jobs) < total,
+    }
+    return store_api_response(cache_key, payload)
 
 
 @app.get("/jobs/{job_id}")

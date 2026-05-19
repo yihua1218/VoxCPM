@@ -1396,6 +1396,14 @@ interface Job {
   static_media?: Record<string, string>;
 }
 
+interface PaginatedJobsResponse {
+  jobs: Job[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
 interface Segment {
   index: number;
   source_text: string;
@@ -1638,6 +1646,14 @@ interface WordEntry {
   generated_at?: number;
 }
 
+interface PaginatedWordsResponse {
+  words: WordEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
 interface ItaigiReferenceCandidate {
   id?: string;
   taigi: string;
@@ -1837,6 +1853,12 @@ function firstSentence(value: string, limit = 56) {
   return first.length > limit ? `${first.slice(0, limit)}...` : first;
 }
 
+function shouldDefaultMakeVideo(text: string) {
+  const cleaned = inlineText(text);
+  const sentenceCount = (cleaned.match(/[。！？!?]/g) ?? []).length;
+  return cleaned.length >= 120 || sentenceCount >= 2;
+}
+
 function activeStepIndex(job?: Job | null) {
   if (!job) return -1;
   if (job.status === 'complete') return pipelineSteps.length;
@@ -1910,6 +1932,10 @@ const exampleTexts = [
   },
 ];
 
+const LIVE_JOBS_POLL_INTERVAL_MS = 60000;
+const LIVE_STATUS_POLL_INTERVAL_MS = 60000;
+const DEFAULT_PAGE_SIZE = 10;
+
 function validPageTab(value: string | null) {
   return value === 'work'
     || value === 'jobs'
@@ -1971,15 +1997,20 @@ function App() {
   const [queueStatus, setQueueStatus] = useState<QueueStatus | null>(null);
   const [stats, setStats] = useState<StatsSummary | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobsTotal, setJobsTotal] = useState(0);
+  const [jobsHasMore, setJobsHasMore] = useState(false);
   const [jobSearch, setJobSearch] = useState('');
   const [completedJobSort, setCompletedJobSort] = useState<CompletedJobSort>('newest');
-  const [completedJobKindFilter, setCompletedJobKindFilter] = useState<JobKindFilter>('all');
-  const [completedJobContentFilter, setCompletedJobContentFilter] = useState<CompletedJobContentFilter>('all');
+  const [completedJobKindFilter, setCompletedJobKindFilter] = useState<JobKindFilter>('script');
+  const [completedJobContentFilter, setCompletedJobContentFilter] = useState<CompletedJobContentFilter>('long_article');
   const [completedJobRatingFilter, setCompletedJobRatingFilter] = useState<CompletedJobRatingFilter>('all');
-  const [completedJobMediaFilter, setCompletedJobMediaFilter] = useState<CompletedJobMediaFilter>('all');
+  const [completedJobMediaFilter, setCompletedJobMediaFilter] = useState<CompletedJobMediaFilter>('video');
   const [completedJobIssueFilter, setCompletedJobIssueFilter] = useState<CompletedJobIssueFilter>('all');
   const [showQueuedJobs, setShowQueuedJobs] = useState(false);
   const [words, setWords] = useState<WordEntry[]>([]);
+  const [wordsTotal, setWordsTotal] = useState(0);
+  const [wordsHasMore, setWordsHasMore] = useState(false);
+  const [loadingWords, setLoadingWords] = useState(false);
   const [wordQuery, setWordQuery] = useState('');
   const [wordSort, setWordSort] = useState<WordSort>('rating');
   const [wordKindFilter, setWordKindFilter] = useState<WordKindFilter>('all');
@@ -1991,6 +2022,7 @@ function App() {
   const [itaigiReferences, setItaigiReferences] = useState<Record<string, ItaigiReferenceResult>>({});
   const [loadingItaigiReferences, setLoadingItaigiReferences] = useState<Record<string, boolean>>({});
   const [applyingItaigiReferences, setApplyingItaigiReferences] = useState<Record<string, boolean>>({});
+  const [generatingWordVideos, setGeneratingWordVideos] = useState<Record<string, boolean>>({});
   const wordQueryRef = useRef('');
   const [uiLanguage, setUiLanguage] = useState<UiLanguage>(initialUiLanguage);
   const [dateTimeFormat, setDateTimeFormat] = useState<DateTimeFormatPreference>(initialDateTimeFormat);
@@ -2027,6 +2059,8 @@ function App() {
   const [readOnlyMode, setReadOnlyMode] = useState(false);
   const [nowSeconds, setNowSeconds] = useState(() => Date.now() / 1000);
   const [form] = Form.useForm<FormValues>();
+  const autoVideoDefaultRef = useRef(true);
+  const syncingVideoDefaultRef = useRef(false);
   const detachedAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const safeJobs = Array.isArray(jobs) ? jobs : [];
@@ -2278,42 +2312,65 @@ function App() {
     setApiInfo(res.data);
   };
 
-  const applyJobs = (nextJobs: Job[]) => {
-    setJobs(nextJobs);
+  const mergeById = <T extends { id: string }>(current: T[], next: T[]) => {
+    const ids = new Set(next.map((item) => item.id));
+    return [...next, ...current.filter((item) => !ids.has(item.id))];
+  };
+
+  const applyJobs = (nextJobs: Job[], append = false) => {
+    const effectiveJobs = append ? mergeById(jobs, nextJobs) : nextJobs;
+    setJobs(effectiveJobs);
     setSelectedJobId((current) => {
-      if (nextJobs.length === 0) return null;
-      if (current && nextJobs.some((job) => job.id === current)) return current;
-      return nextJobs.find((job) => job.status === 'complete' && !!job.featured_at)?.id ?? nextJobs[0].id;
+      if (effectiveJobs.length === 0) return null;
+      if (current && effectiveJobs.some((job) => job.id === current)) return current;
+      return effectiveJobs.find((job) => job.status === 'complete' && !!job.featured_at)?.id ?? effectiveJobs[0].id;
     });
   };
 
-  const loadStaticJobs = async () => {
+  const loadStaticJobs = async (append = false, query = jobSearch) => {
     const snapshot = await loadStaticSnapshot<{ jobs: Job[] }>('jobs/index.json');
-    const nextJobs = Array.isArray(snapshot.jobs) ? snapshot.jobs : [];
+    const cleaned = query.trim().toLowerCase();
+    const sourceJobs = Array.isArray(snapshot.jobs) ? snapshot.jobs : [];
+    const filtered = cleaned ? sourceJobs.filter((job) => jobMatchesSearch(job, cleaned)) : sourceJobs;
+    const offset = append ? jobs.length : 0;
+    const nextJobs = filtered.slice(offset, offset + DEFAULT_PAGE_SIZE);
     setReadOnlyMode(true);
-    applyJobs(nextJobs);
+    setJobsTotal(filtered.length);
+    setJobsHasMore(offset + nextJobs.length < filtered.length);
+    applyJobs(nextJobs, append);
   };
 
-  const loadLiveJobs = async () => {
-    const res = await axios.get<{ jobs: Job[] }>('/jobs');
+  const loadLiveJobs = async (append = false, query = jobSearch) => {
+    const offset = append ? jobs.length : 0;
+    const res = await axios.get<PaginatedJobsResponse>('/jobs', {
+      params: {
+        q: query.trim() || undefined,
+        limit: DEFAULT_PAGE_SIZE,
+        offset,
+      },
+    });
     const nextJobs = Array.isArray(res.data.jobs) ? res.data.jobs : [];
     setReadOnlyMode(false);
-    applyJobs(nextJobs);
+    setJobsTotal(Number.isFinite(res.data.total) ? res.data.total : nextJobs.length);
+    setJobsHasMore(!!res.data.has_more);
+    applyJobs(nextJobs, append);
   };
 
-  const loadJobs = async () => {
+  const loadJobs = async (options: { append?: boolean; query?: string } = {}) => {
+    const append = !!options.append;
+    const query = options.query ?? jobSearch;
     setLoadingJobs(true);
     try {
       if (PREFER_STATIC_DATA && !signedIn) {
-        await loadStaticJobs();
+        await loadStaticJobs(append, query);
       } else {
-        await loadLiveJobs();
+        await loadLiveJobs(append, query);
       }
     } catch {
       if (PREFER_STATIC_DATA && !signedIn) {
-        await loadLiveJobs();
+        await loadLiveJobs(append, query);
       } else {
-        await loadStaticJobs();
+        await loadStaticJobs(append, query);
       }
     } finally {
       setJobsLoaded(true);
@@ -2331,15 +2388,22 @@ function App() {
     setWordQuery(value);
   };
 
-  const loadWords = async (query = wordQueryRef.current) => {
+  const loadWords = async (query = wordQueryRef.current, append = false) => {
     wordQueryRef.current = query;
+    const offset = append ? words.length : 0;
+    setLoadingWords(true);
     try {
       if (PREFER_STATIC_DATA && !signedIn) {
         throw new Error('Prefer static lexicon snapshot.');
       }
-      const res = await axios.get<{ words: WordEntry[]; total: number }>('/words', { params: { q: query, limit: 200 } });
+      const res = await axios.get<PaginatedWordsResponse>('/words', {
+        params: { q: query, limit: DEFAULT_PAGE_SIZE, offset },
+      });
+      const nextWords = Array.isArray(res.data.words) ? res.data.words : [];
       setReadOnlyMode(false);
-      setWords(Array.isArray(res.data.words) ? res.data.words : []);
+      setWords((current) => (append ? mergeById(current, nextWords) : nextWords));
+      setWordsTotal(Number.isFinite(res.data.total) ? res.data.total : nextWords.length);
+      setWordsHasMore(!!res.data.has_more);
     } catch {
       const snapshot = await loadStaticSnapshot<{ words: WordEntry[]; total: number }>('lexicon/index.json');
       const cleaned = query.trim().toLowerCase();
@@ -2352,8 +2416,13 @@ function App() {
           || (item.note ?? '').toLowerCase().includes(cleaned)
         ))
         : (Array.isArray(snapshot.words) ? snapshot.words : []);
+      const nextWords = filtered.slice(offset, offset + DEFAULT_PAGE_SIZE);
       setReadOnlyMode(true);
-      setWords(filtered.slice(0, 200));
+      setWords((current) => (append ? mergeById(current, nextWords) : nextWords));
+      setWordsTotal(filtered.length);
+      setWordsHasMore(offset + nextWords.length < filtered.length);
+    } finally {
+      setLoadingWords(false);
     }
   };
 
@@ -2542,12 +2611,12 @@ function App() {
     }
     loadQueueStatus().catch(() => undefined);
     loadStats().catch(() => undefined);
-    const jobsTimer = window.setInterval(loadJobs, 2500);
+    const jobsTimer = window.setInterval(loadJobs, LIVE_JOBS_POLL_INTERVAL_MS);
     const statusTimer = window.setInterval(() => {
       loadQueueStatus().catch(() => undefined);
       loadStats().catch(() => undefined);
       if (activeTab === 'lexicon') loadWords().catch(() => undefined);
-    }, 2500);
+    }, LIVE_STATUS_POLL_INTERVAL_MS);
     const clockTimer = window.setInterval(() => setNowSeconds(Date.now() / 1000), 1000);
     return () => {
       window.clearInterval(jobsTimer);
@@ -2729,11 +2798,17 @@ function App() {
   };
 
   const applyExample = (text: string) => {
+    autoVideoDefaultRef.current = true;
+    syncingVideoDefaultRef.current = true;
     form.setFieldsValue({
       title: firstSentence(text),
       chinese_text: text,
       taigi_override: '',
+      make_video: shouldDefaultMakeVideo(text),
     });
+    window.setTimeout(() => {
+      syncingVideoDefaultRef.current = false;
+    }, 0);
     message.success('已帶入範例句');
   };
 
@@ -2746,11 +2821,17 @@ function App() {
         style: 'daily',
         length: 'short',
       }, { timeout: 35000 });
+      autoVideoDefaultRef.current = true;
+      syncingVideoDefaultRef.current = true;
       form.setFieldsValue({
         title: res.data.title,
         chinese_text: res.data.chinese_text,
         taigi_override: '',
+        make_video: shouldDefaultMakeVideo(res.data.chinese_text),
       });
+      window.setTimeout(() => {
+        syncingVideoDefaultRef.current = false;
+      }, 0);
       await loadStats().catch(() => undefined);
       message.success(res.data.source === 'llm' ? '已用 LLM 產生隨機句子' : '已用內建句庫產生隨機句子');
     } catch (error) {
@@ -3435,7 +3516,7 @@ function App() {
   const generateWordAudio = async (word: WordEntry, synthesisSource?: SynthesisSource) => {
     const selectedSource = synthesisSource ?? wordSynthesisSources[word.id] ?? 'taigi';
     try {
-      await axios.post(`/words/${word.id}/generate`, { synthesis_source: selectedSource }, { timeout: 30000 });
+      await axios.post(`/words/${word.id}/generate`, { synthesis_source: selectedSource, make_video: false }, { timeout: 30000 });
       await loadWords();
       await loadJobs();
       await loadStats().catch(() => undefined);
@@ -3443,6 +3524,22 @@ function App() {
     } catch (error) {
       const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
       message.error((detail && typeof detail === 'object' ? detail.message : detail) || '無法產生詞語語音');
+    }
+  };
+
+  const generateWordVideo = async (word: WordEntry, asset: WordAsset) => {
+    const key = `${word.id}:${asset.id}`;
+    setGeneratingWordVideos((current) => ({ ...current, [key]: true }));
+    try {
+      await axios.post(`/words/${word.id}/assets/${asset.id}/video`, {}, { timeout: 120000 });
+      await loadWords();
+      await loadStats().catch(() => undefined);
+      message.success('已產生這筆詞語影片');
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      message.error((detail && typeof detail === 'object' ? detail.message : detail) || '無法產生詞語影片');
+    } finally {
+      setGeneratingWordVideos((current) => ({ ...current, [key]: false }));
     }
   };
 
@@ -3639,7 +3736,7 @@ function App() {
               <>
                 <Tag color={isAdmin ? 'success' : 'blue'}>{isAdmin ? t('admin') : t('user')}</Tag>
                 {auth?.email && <Tag>{auth.email}</Tag>}
-                <Button size="small" icon={<ReloadOutlined />} onClick={loadJobs} loading={loadingJobs}>{t('refresh')}</Button>
+                <Button size="small" icon={<ReloadOutlined />} onClick={() => loadJobs()} loading={loadingJobs}>{t('refresh')}</Button>
                 <Button size="small" icon={<LogoutOutlined />} onClick={logout}>{t('signOut')}</Button>
               </>
             ) : (
@@ -3746,8 +3843,24 @@ function App() {
                       inference_timesteps: 10,
                       cfg_value: 2.5,
                       max_chars_per_segment: 90,
-                      make_video: true,
+                      make_video: shouldDefaultMakeVideo(defaultChineseText),
                       copy_to_onedrive: apiInfo?.default_copy_to_onedrive ?? true,
+                    }}
+                    onValuesChange={(changedValues) => {
+                      if (Object.prototype.hasOwnProperty.call(changedValues, 'make_video')) {
+                        if (syncingVideoDefaultRef.current) {
+                          syncingVideoDefaultRef.current = false;
+                        } else {
+                          autoVideoDefaultRef.current = false;
+                        }
+                      }
+                      if (Object.prototype.hasOwnProperty.call(changedValues, 'chinese_text') && autoVideoDefaultRef.current) {
+                        syncingVideoDefaultRef.current = true;
+                        form.setFieldValue('make_video', shouldDefaultMakeVideo(String(changedValues.chinese_text ?? '')));
+                        window.setTimeout(() => {
+                          syncingVideoDefaultRef.current = false;
+                        }, 0);
+                      }
                     }}
                     onFinish={startJob}
                   >
@@ -3813,7 +3926,7 @@ function App() {
                               </Flex>
                               <Flex gap={18} wrap>
                                 <Form.Item name="make_video" valuePropName="checked">
-                                  <Checkbox>輸出 MP4 影片</Checkbox>
+                                  <Checkbox>輸出 MP4 影片（長篇文章預設開啟，短詞句預設只輸出 WAV）</Checkbox>
                                 </Form.Item>
                                 {isAdmin && (
                                   <Form.Item name="copy_to_onedrive" valuePropName="checked">
@@ -4824,7 +4937,7 @@ function App() {
                 <Card className="lexicon-card">
                   <Flex align="center" justify="space-between" className="card-title" gap={12}>
                     <Title level={3} style={{ margin: 0 }}>{t('lexiconTitle')}</Title>
-                    <Text type="secondary">{visibleWords.length} / {words.length} shown</Text>
+                    <Text type="secondary">{visibleWords.length} / {words.length} loaded · {wordsTotal} total</Text>
                   </Flex>
                   <div className="lexicon-controls">
                     <Input.Search
@@ -5196,9 +5309,10 @@ function App() {
                                             </Space>
                                           </div>
                                         )}
-                                        {assetItem.has_video && (
-                                          <div className="word-video-actions">
-                                            <Space size={8} wrap>
+                                        <div className="word-video-actions">
+                                          <Space size={8} wrap>
+                                            {assetItem.has_video ? (
+                                              <>
                                               <Button size="small" icon={<VideoCameraOutlined />} onClick={() => openWordAssetVideo(word, assetItem)}>
                                                 開新視窗播放影片
                                               </Button>
@@ -5206,9 +5320,19 @@ function App() {
                                               <Button size="small" icon={<CopyOutlined />} onClick={() => shareMedia(`word:${word.id}:${assetItem.id}:video`, word.source, 'copy')}>複製影片連結</Button>
                                               <Button size="small" onClick={() => shareMedia(`word:${word.id}:${assetItem.id}:video`, word.source, 'line')}>LINE</Button>
                                               <Button size="small" onClick={() => shareMedia(`word:${word.id}:${assetItem.id}:video`, word.source, 'facebook')}>Facebook</Button>
-                                            </Space>
-                                          </div>
-                                        )}
+                                              </>
+                                            ) : assetItem.has_audio ? (
+                                              <Button
+                                                size="small"
+                                                icon={<VideoCameraOutlined />}
+                                                loading={!!generatingWordVideos[`${word.id}:${assetItem.id}`]}
+                                                onClick={() => generateWordVideo(word, assetItem)}
+                                              >
+                                                產生影片
+                                              </Button>
+                                            ) : null}
+                                          </Space>
+                                        </div>
                                       </div>
                                     ))}
                                   </Space>
@@ -5235,6 +5359,13 @@ function App() {
                           </div>
                         );
                       })}
+                      {wordsHasMore && (
+                        <Flex justify="center">
+                          <Button loading={loadingWords} onClick={() => loadWords(wordQueryRef.current, true)}>
+                            載入更多詞條
+                          </Button>
+                        </Flex>
+                      )}
                     </Space>
                   )}
                 </Card>
@@ -5242,7 +5373,7 @@ function App() {
                 <Card className="jobs-card">
                   <Flex align="center" justify="space-between" className="card-title">
                     <Title level={3} style={{ margin: 0 }}>{t('jobs')}</Title>
-                    <Text type="secondary">{jobsLoaded ? `${jobs.length} 筆` : '載入中'}</Text>
+                    <Text type="secondary">{jobsLoaded ? `${jobs.length} / ${jobsTotal} 筆` : '載入中'}</Text>
                   </Flex>
                   <div className="job-overview-controls">
                     <Input.Search
@@ -5250,6 +5381,10 @@ function App() {
                       placeholder="搜尋已完成/失敗工作、標題、內容、台語、台羅"
                       value={jobSearch}
                       onChange={(event) => setJobSearch(event.target.value)}
+                      onSearch={(value) => {
+                        setJobSearch(value);
+                        loadJobs({ query: value }).catch(() => undefined);
+                      }}
                     />
                     <Select<CompletedJobSort>
                       value={completedJobSort}
@@ -5488,6 +5623,13 @@ function App() {
                           )}
                         </div>
                       ))}
+                      {jobsHasMore && (
+                        <Flex justify="center">
+                          <Button loading={loadingJobs} onClick={() => loadJobs({ append: true })}>
+                            載入更多工作
+                          </Button>
+                        </Flex>
+                      )}
                     </Space>
                   )}
                 </Card>
