@@ -1066,6 +1066,40 @@ a {
   background: #fff;
 }
 
+.segment-audio-player {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+}
+
+.segment-quick-source {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.segment-quick-review {
+  margin-top: 12px;
+}
+
+.segment-synthesis-select {
+  min-width: 156px;
+}
+
+.segment-details-collapse {
+  margin-top: 8px;
+}
+
+.segment-details-collapse .ant-collapse-header {
+  padding: 4px 0 !important;
+  color: var(--tvv-primary) !important;
+  font-weight: 700;
+}
+
+.segment-details-collapse .ant-collapse-content-box {
+  padding: 4px 0 0 !important;
+}
+
 .segment-text-grid {
   display: grid;
   grid-template-columns: 1fr;

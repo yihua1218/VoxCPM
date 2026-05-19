@@ -2033,6 +2033,7 @@ function App() {
   const [feedbackDrafts, setFeedbackDrafts] = useState<Record<number, SegmentReviewPayload>>({});
   const [selectedSegmentTokens, setSelectedSegmentTokens] = useState<Record<number, string[]>>({});
   const [regeneratingSegments, setRegeneratingSegments] = useState<Record<number, boolean>>({});
+  const [markingSegmentStatus, setMarkingSegmentStatus] = useState<Record<number, boolean>>({});
   const [segmentSynthesisSources, setSegmentSynthesisSources] = useState<Record<number, SynthesisSource>>({});
   const [wordSynthesisSources, setWordSynthesisSources] = useState<Record<string, SynthesisSource>>({});
   const [jobError, setJobError] = useState<string | null>(null);
@@ -3240,6 +3241,46 @@ function App() {
     }
   };
 
+  const markSegmentStatus = async (segment: Segment, status: 'problem' | 'ok') => {
+    const draft = feedbackDrafts[segment.index];
+    if (!selectedJob || !draft) {
+      message.warning('分段資料尚未載入完成');
+      return;
+    }
+    const nextDraft: SegmentReviewPayload = {
+      ...draft,
+      rating: status === 'ok' ? 5 : 1,
+      note: draft.note.trim() || (status === 'ok' ? '快速標示：這段沒問題' : '快速標示：這段有問題'),
+    };
+    updateFeedback(segment.index, nextDraft);
+    setMarkingSegmentStatus((current) => ({ ...current, [segment.index]: true }));
+    try {
+      const res = await axios.post<{ saved: boolean; stats: { my_rating?: number | null; average_rating?: number | null; rating_count?: number } }>(
+        `/jobs/${selectedJob.id}/segments/${segment.index}/feedback`,
+        segmentFeedbackBody(nextDraft),
+      );
+      setSegments((current) => current.map((item) => (
+        item.index === segment.index
+          ? {
+              ...item,
+              my_rating: res.data.stats.my_rating ?? nextDraft.rating,
+              average_rating: res.data.stats.average_rating ?? item.average_rating,
+              rating_count: res.data.stats.rating_count ?? item.rating_count,
+              feedback_count: res.data.stats.rating_count ?? item.feedback_count,
+              my_note: nextDraft.note,
+            }
+          : item
+      )));
+      await loadStats().catch(() => undefined);
+      message.success(`已標示這段${status === 'ok' ? '沒問題' : '有問題'}`);
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null;
+      message.error(detail || '分段標示儲存失敗');
+    } finally {
+      setMarkingSegmentStatus((current) => ({ ...current, [segment.index]: false }));
+    }
+  };
+
   const saveSegmentRating = async (segment: Segment, rating: number) => {
     updateFeedback(segment.index, { rating });
     if (!selectedJob || rating < 1) return;
@@ -4159,196 +4200,224 @@ function App() {
                                     <audio
                                       controls
                                       preload="none"
-                                      style={{ width: '100%', marginTop: 10 }}
+                                      className="segment-audio-player"
                                       src={segmentAudioSrc(selectedJob, segment)}
                                     />
-                                    <Space size={8} wrap className="share-actions">
-                                      <Button size="small" icon={<CopyOutlined />} onClick={() => shareMedia(`segment:${selectedJob.id}:${segment.index}`, `${jobDisplayTitle(selectedJob)} Segment ${segment.index}`, 'copy')}>複製這段連結</Button>
-                                      <Button size="small" onClick={() => shareMedia(`segment:${selectedJob.id}:${segment.index}`, `${jobDisplayTitle(selectedJob)} Segment ${segment.index}`, 'line')}>LINE</Button>
-                                      <Button size="small" onClick={() => shareMedia(`segment:${selectedJob.id}:${segment.index}`, `${jobDisplayTitle(selectedJob)} Segment ${segment.index}`, 'facebook')}>Facebook</Button>
-                                    </Space>
-                                    {segment.audio_review && (
-                                      <div className="audio-review-panel">
-                                        <Flex align="center" justify="space-between" gap={8} wrap>
-                                          <Space size={8} wrap>
-                                            <Text strong>音訊校對</Text>
-                                            {segment.audio_review.comparison?.similarity != null && (
-                                              <Tag color={segment.audio_review.comparison.similarity >= 0.8 ? 'success' : segment.audio_review.comparison.similarity >= 0.65 ? 'warning' : 'error'}>
-                                                相似度 {(segment.audio_review.comparison.similarity * 100).toFixed(1)}%
-                                              </Tag>
-                                            )}
-                                            {segment.audio_review.comparison?.cer != null && <Tag>CER {(segment.audio_review.comparison.cer * 100).toFixed(1)}%</Tag>}
-                                            {(segment.audio_review.issues ?? []).map((issue) => <Tag color="error" key={issue}>{issue}</Tag>)}
-                                          </Space>
-                                          <Tag color={segment.audio_review.asr_status?.available ? 'processing' : 'default'}>
-                                            {segment.audio_review.asr_status?.available ? 'Breeze ASR' : 'ASR 未執行'}
-                                          </Tag>
-                                        </Flex>
-                                        {segment.audio_review.asr_transcript ? (
-                                          <Text type="secondary">ASR 轉寫：{segment.audio_review.asr_transcript}</Text>
-                                        ) : (
-                                          <Text type="secondary">{segment.audio_review.asr_status?.reason || '尚未有 ASR 轉寫結果。'}</Text>
-                                        )}
-                                        {segment.audio_review.mms_status?.audio_file && (
-                                          <Text type="secondary">MMS 對照音檔：{segment.audio_review.mms_status.audio_file}</Text>
-                                        )}
-                                      </div>
-                                    )}
-                                    <div className="segment-text-grid">
-                                      <div>
-                                        <Text strong>原本中文</Text>
-                                        <Input.TextArea value={segment.source_text} autoSize readOnly className="textarea-mono compact-textarea" />
-                                      </div>
-                                      {(segment.source_tokens ?? []).length > 0 && (
-                                        <div className="segment-token-panel">
-                                          <Flex align="center" justify="space-between" gap={8} wrap>
-                                            <Space size={8} wrap>
-                                              <Text strong>斷詞</Text>
-                                              <Tag>{segment.source_tokens?.length ?? 0} 詞</Tag>
-                                              {selectedTokenCount > 0 && <Tag color="processing">已選 {selectedTokenCount}</Tag>}
-                                            </Space>
-                                            <Space size={6} wrap>
-                                              <Button size="small" danger onClick={() => markSelectedSegmentTokens(segment, 'problem')}>
-                                                標示有問題
-                                              </Button>
-                                              <Button size="small" onClick={() => markSelectedSegmentTokens(segment, 'ok')}>
-                                                標示沒問題
-                                              </Button>
-                                              <Button size="small" type="primary" onClick={() => submitFeedback(segment)}>
-                                                批次儲存紀錄
-                                              </Button>
-                                              <Button size="small" onClick={() => reportSelectedSegmentTokens(segment)}>
-                                                標記詞庫問題
-                                              </Button>
-                                              <Button size="small" icon={<AudioOutlined />} onClick={() => generateSelectedTokenAudio(segment)}>
-                                                產生單詞語音
-                                              </Button>
-                                              <Button size="small" disabled={selectedTokenCount === 0} onClick={() => clearSegmentTokenSelection(segment.index)}>
-                                                清除選取
-                                              </Button>
-                                            </Space>
-                                          </Flex>
-                                          <div className="segment-token-list">
-                                            {(segment.source_tokens ?? []).map((token, tokenIndex) => (
-                                              <button
-                                                type="button"
-                                                key={`${segment.index}-${token.source}-${tokenIndex}`}
-                                                className={[
-                                                  'segment-token',
-                                                  token.problem ? 'has-problem' : '',
-                                                  segmentTokenStatus(segment, token) === 'problem' ? 'is-reviewed-problem' : '',
-                                                  segmentTokenStatus(segment, token) === 'ok' ? 'is-reviewed-ok' : '',
-                                                  selectedSegmentTokens[segment.index]?.includes(segmentTokenKey(token)) ? 'is-selected' : '',
-                                                ].filter(Boolean).join(' ')}
-                                                onClick={() => toggleSegmentToken(segment, token)}
-                                              >
-                                                <span>{token.source}</span>
-                                                {segmentTokenStatus(segment, token) === 'problem' && <small>有問題</small>}
-                                                {segmentTokenStatus(segment, token) === 'ok' && <small>沒問題</small>}
-                                                {!segmentTokenStatus(segment, token) && token.exists && <small>{token.problem ? '問題' : token.has_audio ? '有音檔' : '詞庫'}</small>}
-                                              </button>
-                                            ))}
-                                          </div>
-                                        </div>
-                                      )}
-                                      <div>
-                                        <Text strong>台語文字</Text>
-                                        <Input.TextArea value={inlineText(segment.taigi_text)} autoSize readOnly className="textarea-mono compact-textarea" />
-                                      </div>
-                                      <div>
-                                        <Text strong>台羅拼音</Text>
-                                        <Input.TextArea value={inlineText(segment.tailo_text)} autoSize readOnly className="textarea-mono compact-textarea" />
-                                      </div>
+                                    <div className="segment-quick-source">
+                                      <Text strong>原本中文</Text>
+                                      <Input.TextArea value={segment.source_text} autoSize readOnly className="textarea-mono compact-textarea" />
                                     </div>
                                     {draft && (
-                                      <Space direction="vertical" size={10} style={{ width: '100%', marginTop: 12 }}>
-                                        <Flex align="center" gap={12} wrap>
-                                          <Text strong>正確度評分</Text>
-                                          <Rate
-                                            value={draft.rating}
-                                            onChange={(rating) => saveSegmentRating(segment, rating)}
-                                          />
-                                          <Text type="secondary">可選取上方文字，再按下「帶入選取詞」</Text>
-                                        </Flex>
-                                        <Input.TextArea
-                                          rows={2}
-                                          value={draft.note}
-                                          onChange={(event) => updateFeedback(segment.index, { note: event.target.value })}
-                                          placeholder="整段評語，例如：語音自然，但是「新聞」台語詞想改。"
-                                        />
-                                        <div className="segment-text-grid">
-                                          <div>
-                                            <Text strong>修正後台語文字</Text>
-                                            <Input.TextArea
-                                              autoSize={{ minRows: 1, maxRows: 6 }}
-                                              value={draft.corrected_taigi_text}
-                                              className="textarea-mono compact-textarea"
-                                              onChange={(event) => updateFeedback(segment.index, { corrected_taigi_text: event.target.value })}
-                                            />
-                                          </div>
-                                          <div>
-                                            <Text strong>修正後台羅</Text>
-                                            <Input.TextArea
-                                              autoSize={{ minRows: 1, maxRows: 6 }}
-                                              value={draft.corrected_tailo_text}
-                                              className="textarea-mono compact-textarea"
-                                              onChange={(event) => updateFeedback(segment.index, { corrected_tailo_text: event.target.value })}
-                                            />
-                                          </div>
-                                        </div>
-                                        {draft.corrections.map((correction, correctionIndex) => (
-                                          <div className="correction-row" key={correctionIndex}>
-                                            <Input
-                                              value={correction.source_phrase}
-                                              onChange={(event) => updateCorrection(segment.index, correctionIndex, 'source_phrase', event.target.value)}
-                                              placeholder="原文字詞"
-                                            />
-                                            <Input
-                                              value={correction.taigi_correction}
-                                              onChange={(event) => updateCorrection(segment.index, correctionIndex, 'taigi_correction', event.target.value)}
-                                              placeholder="台語修正"
-                                            />
-                                            <Input
-                                              value={correction.tailo_correction}
-                                              onChange={(event) => updateCorrection(segment.index, correctionIndex, 'tailo_correction', event.target.value)}
-                                              placeholder="台羅修正"
-                                            />
-                                            <Select
-                                              value={correction.status || ''}
-                                              onChange={(value) => updateCorrection(segment.index, correctionIndex, 'status', value)}
+                                      <>
+                                        <Flex align="center" justify="space-between" gap={10} wrap className="segment-quick-review">
+                                          <Space size={8} wrap>
+                                            <Button danger loading={!!markingSegmentStatus[segment.index]} onClick={() => markSegmentStatus(segment, 'problem')}>
+                                              標示有問題
+                                            </Button>
+                                            <Button loading={!!markingSegmentStatus[segment.index]} onClick={() => markSegmentStatus(segment, 'ok')}>
+                                              標示沒問題
+                                            </Button>
+                                          </Space>
+                                          <Space size={8} wrap>
+                                            <Select<SynthesisSource>
+                                              className="segment-synthesis-select"
+                                              value={segmentSynthesisSources[segment.index] ?? 'taigi'}
+                                              onChange={(value) => setSegmentSynthesisSources((current) => ({ ...current, [segment.index]: value }))}
                                               options={[
-                                                { value: '', label: '未標示' },
-                                                { value: 'problem', label: '有問題' },
-                                                { value: 'ok', label: '沒問題' },
+                                                { value: 'taigi', label: '用台語文字生成' },
+                                                { value: 'tailo', label: '用台羅生成' },
                                               ]}
                                             />
-                                            <Button onClick={() => updateCorrection(segment.index, correctionIndex, 'source_phrase', selectedText())}>
-                                              帶入選取詞
+                                            <Button
+                                              type="primary"
+                                              icon={<AudioOutlined />}
+                                              loading={!!regeneratingSegments[segment.index]}
+                                              onClick={() => regenerateSegment(segment)}
+                                            >
+                                              重新產生這段語音
                                             </Button>
-                                          </div>
-                                        ))}
-                                        <Flex gap={10} wrap>
-                                          <Button onClick={() => addCorrection(segment.index)}>新增修正詞</Button>
-                                          <Button type="primary" onClick={() => submitFeedback(segment)}>
-                                            儲存這段回饋
-                                          </Button>
-                                          <Select<SynthesisSource>
-                                            value={segmentSynthesisSources[segment.index] ?? 'taigi'}
-                                            onChange={(value) => setSegmentSynthesisSources((current) => ({ ...current, [segment.index]: value }))}
-                                            options={[
-                                              { value: 'taigi', label: '用台語文字生成' },
-                                              { value: 'tailo', label: '用台羅生成' },
-                                            ]}
-                                          />
-                                          <Button
-                                            icon={<AudioOutlined />}
-                                            loading={!!regeneratingSegments[segment.index]}
-                                            onClick={() => regenerateSegment(segment)}
-                                          >
-                                            重新產生這段語音
-                                          </Button>
+                                          </Space>
                                         </Flex>
-                                      </Space>
+                                        <Collapse
+                                          ghost
+                                          className="segment-details-collapse"
+                                          items={[
+                                            {
+                                              key: 'details',
+                                              label: '展開進階詳細項目',
+                                              children: (
+                                                <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                                                  <Space size={8} wrap className="share-actions">
+                                                    <Button size="small" icon={<CopyOutlined />} onClick={() => shareMedia(`segment:${selectedJob.id}:${segment.index}`, `${jobDisplayTitle(selectedJob)} Segment ${segment.index}`, 'copy')}>複製這段連結</Button>
+                                                    <Button size="small" onClick={() => shareMedia(`segment:${selectedJob.id}:${segment.index}`, `${jobDisplayTitle(selectedJob)} Segment ${segment.index}`, 'line')}>LINE</Button>
+                                                    <Button size="small" onClick={() => shareMedia(`segment:${selectedJob.id}:${segment.index}`, `${jobDisplayTitle(selectedJob)} Segment ${segment.index}`, 'facebook')}>Facebook</Button>
+                                                  </Space>
+                                                  {segment.audio_review && (
+                                                    <div className="audio-review-panel">
+                                                      <Flex align="center" justify="space-between" gap={8} wrap>
+                                                        <Space size={8} wrap>
+                                                          <Text strong>音訊校對</Text>
+                                                          {segment.audio_review.comparison?.similarity != null && (
+                                                            <Tag color={segment.audio_review.comparison.similarity >= 0.8 ? 'success' : segment.audio_review.comparison.similarity >= 0.65 ? 'warning' : 'error'}>
+                                                              相似度 {(segment.audio_review.comparison.similarity * 100).toFixed(1)}%
+                                                            </Tag>
+                                                          )}
+                                                          {segment.audio_review.comparison?.cer != null && <Tag>CER {(segment.audio_review.comparison.cer * 100).toFixed(1)}%</Tag>}
+                                                          {(segment.audio_review.issues ?? []).map((issue) => <Tag color="error" key={issue}>{issue}</Tag>)}
+                                                        </Space>
+                                                        <Tag color={segment.audio_review.asr_status?.available ? 'processing' : 'default'}>
+                                                          {segment.audio_review.asr_status?.available ? 'Breeze ASR' : 'ASR 未執行'}
+                                                        </Tag>
+                                                      </Flex>
+                                                      {segment.audio_review.asr_transcript ? (
+                                                        <Text type="secondary">ASR 轉寫：{segment.audio_review.asr_transcript}</Text>
+                                                      ) : (
+                                                        <Text type="secondary">{segment.audio_review.asr_status?.reason || '尚未有 ASR 轉寫結果。'}</Text>
+                                                      )}
+                                                      {segment.audio_review.mms_status?.audio_file && (
+                                                        <Text type="secondary">MMS 對照音檔：{segment.audio_review.mms_status.audio_file}</Text>
+                                                      )}
+                                                    </div>
+                                                  )}
+                                                  <div className="segment-text-grid">
+                                                    {(segment.source_tokens ?? []).length > 0 && (
+                                                      <div className="segment-token-panel">
+                                                        <Flex align="center" justify="space-between" gap={8} wrap>
+                                                          <Space size={8} wrap>
+                                                            <Text strong>斷詞</Text>
+                                                            <Tag>{segment.source_tokens?.length ?? 0} 詞</Tag>
+                                                            {selectedTokenCount > 0 && <Tag color="processing">已選 {selectedTokenCount}</Tag>}
+                                                          </Space>
+                                                          <Space size={6} wrap>
+                                                            <Button size="small" danger onClick={() => markSelectedSegmentTokens(segment, 'problem')}>
+                                                              標示有問題
+                                                            </Button>
+                                                            <Button size="small" onClick={() => markSelectedSegmentTokens(segment, 'ok')}>
+                                                              標示沒問題
+                                                            </Button>
+                                                            <Button size="small" type="primary" onClick={() => submitFeedback(segment)}>
+                                                              批次儲存紀錄
+                                                            </Button>
+                                                            <Button size="small" onClick={() => reportSelectedSegmentTokens(segment)}>
+                                                              標記詞庫問題
+                                                            </Button>
+                                                            <Button size="small" icon={<AudioOutlined />} onClick={() => generateSelectedTokenAudio(segment)}>
+                                                              產生單詞語音
+                                                            </Button>
+                                                            <Button size="small" disabled={selectedTokenCount === 0} onClick={() => clearSegmentTokenSelection(segment.index)}>
+                                                              清除選取
+                                                            </Button>
+                                                          </Space>
+                                                        </Flex>
+                                                        <div className="segment-token-list">
+                                                          {(segment.source_tokens ?? []).map((token, tokenIndex) => (
+                                                            <button
+                                                              type="button"
+                                                              key={`${segment.index}-${token.source}-${tokenIndex}`}
+                                                              className={[
+                                                                'segment-token',
+                                                                token.problem ? 'has-problem' : '',
+                                                                segmentTokenStatus(segment, token) === 'problem' ? 'is-reviewed-problem' : '',
+                                                                segmentTokenStatus(segment, token) === 'ok' ? 'is-reviewed-ok' : '',
+                                                                selectedSegmentTokens[segment.index]?.includes(segmentTokenKey(token)) ? 'is-selected' : '',
+                                                              ].filter(Boolean).join(' ')}
+                                                              onClick={() => toggleSegmentToken(segment, token)}
+                                                            >
+                                                              <span>{token.source}</span>
+                                                              {segmentTokenStatus(segment, token) === 'problem' && <small>有問題</small>}
+                                                              {segmentTokenStatus(segment, token) === 'ok' && <small>沒問題</small>}
+                                                              {!segmentTokenStatus(segment, token) && token.exists && <small>{token.problem ? '問題' : token.has_audio ? '有音檔' : '詞庫'}</small>}
+                                                            </button>
+                                                          ))}
+                                                        </div>
+                                                      </div>
+                                                    )}
+                                                    <div>
+                                                      <Text strong>台語文字</Text>
+                                                      <Input.TextArea value={inlineText(segment.taigi_text)} autoSize readOnly className="textarea-mono compact-textarea" />
+                                                    </div>
+                                                    <div>
+                                                      <Text strong>台羅拼音</Text>
+                                                      <Input.TextArea value={inlineText(segment.tailo_text)} autoSize readOnly className="textarea-mono compact-textarea" />
+                                                    </div>
+                                                  </div>
+                                                  <Flex align="center" gap={12} wrap>
+                                                    <Text strong>正確度評分</Text>
+                                                    <Rate
+                                                      value={draft.rating}
+                                                      onChange={(rating) => saveSegmentRating(segment, rating)}
+                                                    />
+                                                    <Text type="secondary">可選取上方文字，再按下「帶入選取詞」</Text>
+                                                  </Flex>
+                                                  <Input.TextArea
+                                                    rows={2}
+                                                    value={draft.note}
+                                                    onChange={(event) => updateFeedback(segment.index, { note: event.target.value })}
+                                                    placeholder="整段評語，例如：語音自然，但是「新聞」台語詞想改。"
+                                                  />
+                                                  <div className="segment-text-grid">
+                                                    <div>
+                                                      <Text strong>修正後台語文字</Text>
+                                                      <Input.TextArea
+                                                        autoSize={{ minRows: 1, maxRows: 6 }}
+                                                        value={draft.corrected_taigi_text}
+                                                        className="textarea-mono compact-textarea"
+                                                        onChange={(event) => updateFeedback(segment.index, { corrected_taigi_text: event.target.value })}
+                                                      />
+                                                    </div>
+                                                    <div>
+                                                      <Text strong>修正後台羅</Text>
+                                                      <Input.TextArea
+                                                        autoSize={{ minRows: 1, maxRows: 6 }}
+                                                        value={draft.corrected_tailo_text}
+                                                        className="textarea-mono compact-textarea"
+                                                        onChange={(event) => updateFeedback(segment.index, { corrected_tailo_text: event.target.value })}
+                                                      />
+                                                    </div>
+                                                  </div>
+                                                  {draft.corrections.map((correction, correctionIndex) => (
+                                                    <div className="correction-row" key={correctionIndex}>
+                                                      <Input
+                                                        value={correction.source_phrase}
+                                                        onChange={(event) => updateCorrection(segment.index, correctionIndex, 'source_phrase', event.target.value)}
+                                                        placeholder="原文字詞"
+                                                      />
+                                                      <Input
+                                                        value={correction.taigi_correction}
+                                                        onChange={(event) => updateCorrection(segment.index, correctionIndex, 'taigi_correction', event.target.value)}
+                                                        placeholder="台語修正"
+                                                      />
+                                                      <Input
+                                                        value={correction.tailo_correction}
+                                                        onChange={(event) => updateCorrection(segment.index, correctionIndex, 'tailo_correction', event.target.value)}
+                                                        placeholder="台羅修正"
+                                                      />
+                                                      <Select
+                                                        value={correction.status || ''}
+                                                        onChange={(value) => updateCorrection(segment.index, correctionIndex, 'status', value)}
+                                                        options={[
+                                                          { value: '', label: '未標示' },
+                                                          { value: 'problem', label: '有問題' },
+                                                          { value: 'ok', label: '沒問題' },
+                                                        ]}
+                                                      />
+                                                      <Button onClick={() => updateCorrection(segment.index, correctionIndex, 'source_phrase', selectedText())}>
+                                                        帶入選取詞
+                                                      </Button>
+                                                    </div>
+                                                  ))}
+                                                  <Flex gap={10} wrap>
+                                                    <Button onClick={() => addCorrection(segment.index)}>新增修正詞</Button>
+                                                    <Button type="primary" onClick={() => submitFeedback(segment)}>
+                                                      儲存這段回饋
+                                                    </Button>
+                                                  </Flex>
+                                                </Space>
+                                              ),
+                                            },
+                                          ]}
+                                        />
+                                      </>
                                     )}
                                   </div>
                                 );
