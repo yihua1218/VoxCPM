@@ -1,17 +1,20 @@
 #!/bin/zsh
 set -euo pipefail
 
-cd /Users/yihua/workspace/voxcpm-project/VoxCPM
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+cd "$PROJECT_ROOT"
 
 ulimit -n 4096
 
-if [ -f /Users/yihua/workspace/ai-mail-butler/.env ]; then
+if [ -f "$PROJECT_ROOT/.env" ]; then
   set -a
-  source /Users/yihua/workspace/ai-mail-butler/.env
+  source "$PROJECT_ROOT/.env"
   set +a
 fi
 
 export TAIGI_WEB_ADMIN_EMAIL="${ADMIN_EMAIL:-yihua1218@gmail.com}"
 export TAIGI_WEB_PUBLIC_URL="${TAIGI_WEB_PUBLIC_URL:-https://taigi.yihua.app}"
 
-exec /Users/yihua/workspace/voxcpm-project/VoxCPM/.venv/bin/uvicorn taigi_web.server:app --host 0.0.0.0 --port 8876
+exec "$PROJECT_ROOT/.venv/bin/uvicorn" taigi_web.server:app --host 0.0.0.0 --port 8876
