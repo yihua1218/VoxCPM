@@ -187,15 +187,14 @@ PUBLIC_ACCESS = os.environ.get("TAIGI_WEB_PUBLIC_ACCESS", "1").lower() not in {"
 SESSION_COOKIE = "taigi_web_token"
 ADMIN_SESSION_COOKIE = "taigi_admin_session"
 REVIEWER_COOKIE = "taigi_reviewer_id"
-ADMIN_EMAIL = (os.environ.get("TAIGI_WEB_ADMIN_EMAIL") or os.environ.get("ADMIN_EMAIL") or "yihua1218@gmail.com").strip().lower()
-PUBLIC_URL = os.environ.get("TAIGI_WEB_PUBLIC_URL") or os.environ.get("PUBLIC_URL") or "https://taigi.yihua.app"
+ADMIN_EMAIL = (os.environ.get("TAIGI_WEB_ADMIN_EMAIL") or os.environ.get("ADMIN_EMAIL") or "admin@example.com").strip().lower()
+PUBLIC_URL = os.environ.get("TAIGI_WEB_PUBLIC_URL") or os.environ.get("PUBLIC_URL") or "http://127.0.0.1:8876"
 CORS_ORIGINS = [
     origin.strip().rstrip("/")
     for origin in os.environ.get(
         "TAIGI_WEB_CORS_ORIGINS",
         ",".join([
             PUBLIC_URL,
-            "https://xn--kpr858j.yihua.app",
             "http://localhost:5173",
             "http://127.0.0.1:5174",
         ]),

@@ -1,4 +1,4 @@
-const ASSET_ORIGIN = "https://static-taigi.yihua.app";
+const ASSET_ORIGIN = "https://static-taigi.example.com";
 
 function frontendPath(pathname) {
   if (pathname === "/") return "/index.html";

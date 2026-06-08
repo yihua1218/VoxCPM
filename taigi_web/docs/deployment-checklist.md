@@ -10,8 +10,8 @@ cd taigi_web/frontend
 npm install
 
 VITE_PREFER_STATIC_DATA=true \
-VITE_STATIC_DATA_BASE_URL=https://static-taigi.yihua.app/public \
-VITE_API_BASE_URL=https://api-taigi.yihua.app \
+VITE_STATIC_DATA_BASE_URL=https://static-taigi.example.com/public \
+VITE_API_BASE_URL=https://api-taigi.example.com \
 npm run build
 ```
 
@@ -26,9 +26,9 @@ taigi_web/frontend/dist
 Backend `.env`:
 
 ```bash
-TAIGI_WEB_PUBLIC_URL=https://taigi.yihua.app
-TAIGI_WEB_PUBLIC_STATIC_URL=https://static-taigi.yihua.app
-TAIGI_WEB_CORS_ORIGINS=https://taigi.yihua.app,https://xn--kpr858j.yihua.app,http://localhost:5173,http://127.0.0.1:5174
+TAIGI_WEB_PUBLIC_URL=https://taigi.example.com
+TAIGI_WEB_PUBLIC_STATIC_URL=https://static-taigi.example.com
+TAIGI_WEB_CORS_ORIGINS=https://taigi.example.com,https://taigi-alt.example.com,http://localhost:5173,http://127.0.0.1:5174
 ```
 
 Restart the backend after changes.
@@ -38,10 +38,10 @@ Restart the backend after changes.
 Required records:
 
 ```text
-taigi.yihua.app             frontend hosting
-xn--kpr858j.yihua.app       frontend alias or redirect
-static-taigi.yihua.app      R2 custom domain
-api-taigi.yihua.app         HAProxy / backend API
+taigi.example.com             frontend hosting
+taigi-alt.example.com       frontend alias or redirect
+static-taigi.example.com      R2 custom domain
+api-taigi.example.com         HAProxy / backend API
 ```
 
 Use one-level subdomains to avoid nested-subdomain certificate coverage issues.
@@ -54,8 +54,8 @@ R2 bucket CORS:
 [
   {
     "AllowedOrigins": [
-      "https://taigi.yihua.app",
-      "https://xn--kpr858j.yihua.app",
+      "https://taigi.example.com",
+      "https://taigi-alt.example.com",
       "http://localhost:5173"
     ],
     "AllowedMethods": ["GET", "HEAD"],
@@ -108,12 +108,12 @@ aws s3 sync taigi_web_jobs/public_static/public s3://YOUR_BUCKET/public \
 Expected public URL:
 
 ```text
-https://static-taigi.yihua.app/public/index.json
+https://static-taigi.example.com/public/index.json
 ```
 
 ## 7. Optional: Sync Frontend To Same R2 Bucket
 
-Only use this if `taigi.yihua.app` is also hosted from R2.
+Only use this if `taigi.example.com` is also hosted from R2.
 
 First deployment, avoid `--delete`:
 
@@ -139,7 +139,7 @@ If R2 is used for the frontend before Cloudflare Pages is ready, add a Worker
 route:
 
 ```text
-taigi.yihua.app/*
+taigi.example.com/*
 ```
 
 Use the script in:
@@ -153,7 +153,7 @@ and `/public/...` object paths intact.
 
 ## 8. HAProxy Rule
 
-`api-taigi.yihua.app` should route to the Taigi backend.
+`api-taigi.example.com` should route to the Taigi backend.
 
 Validate before reload:
 
@@ -170,8 +170,8 @@ Reload:
 Test from the HAProxy host:
 
 ```bash
-printf 'GET /api/info HTTP/1.1\r\nHost: api-taigi.yihua.app\r\nConnection: close\r\n\r\n' \
-  | openssl s_client -connect 127.0.0.1:443 -servername api-taigi.yihua.app -quiet
+printf 'GET /api/info HTTP/1.1\r\nHost: api-taigi.example.com\r\nConnection: close\r\n\r\n' \
+  | openssl s_client -connect 127.0.0.1:443 -servername api-taigi.example.com -quiet
 ```
 
 Expected:
@@ -186,16 +186,16 @@ content-type: application/json
 Open:
 
 ```text
-https://taigi.yihua.app/
+https://taigi.example.com/
 ```
 
 Check Network:
 
-- Public snapshot requests go to `https://static-taigi.yihua.app/public/...`.
-- Media requests go to `https://static-taigi.yihua.app/public/media/...`.
-- Anonymous browsing does not poll `https://api-taigi.yihua.app/jobs` every 2.5
+- Public snapshot requests go to `https://static-taigi.example.com/public/...`.
+- Media requests go to `https://static-taigi.example.com/public/media/...`.
+- Anonymous browsing does not poll `https://api-taigi.example.com/jobs` every 2.5
   seconds.
-- Login, admin, and create job actions call `https://api-taigi.yihua.app/...`.
+- Login, admin, and create job actions call `https://api-taigi.example.com/...`.
 
 ## 10. Rollback Notes
 

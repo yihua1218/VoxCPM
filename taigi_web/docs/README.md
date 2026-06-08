@@ -4,10 +4,10 @@ This directory documents the Taigi Voice Video Web deployment plan.
 
 Recommended production split:
 
-- `https://taigi.yihua.app` - public frontend app
-- `https://xn--kpr858j.yihua.app` - optional public frontend alias or redirect
-- `https://static-taigi.yihua.app` - R2 static snapshots and media files
-- `https://api-taigi.yihua.app` - FastAPI backend
+- `https://taigi.example.com` - public frontend app
+- `https://taigi-alt.example.com` - optional public frontend alias or redirect
+- `https://static-taigi.example.com` - R2 static snapshots and media files
+- `https://api-taigi.example.com` - FastAPI backend
 
 Start with:
 

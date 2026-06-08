@@ -18,21 +18,21 @@ Use one-level subdomains under `yihua.app` so Cloudflare Universal SSL covers
 them without Advanced Certificate Manager.
 
 ```text
-taigi.yihua.app
+taigi.example.com
   Public frontend app: index.html, JS, CSS, og-image.png.
 
-xn--kpr858j.yihua.app
-  Optional frontend alias or redirect to taigi.yihua.app.
+taigi-alt.example.com
+  Optional frontend alias or redirect to taigi.example.com.
 
-static-taigi.yihua.app
+static-taigi.example.com
   R2 custom domain for public snapshots and generated media.
 
-api-taigi.yihua.app
+api-taigi.example.com
   FastAPI backend behind HAProxy.
 ```
 
-Avoid deeper hosts such as `api.taigi.yihua.app` and
-`static.taigi.yihua.app` unless a certificate covering `*.taigi.yihua.app` is
+Avoid deeper hosts such as `api.taigi.example.com` and
+`static.taigi.example.com` unless a certificate covering `*.taigi.example.com` is
 installed. Cloudflare Universal SSL normally covers `yihua.app` and
 `*.yihua.app`, not nested subdomains.
 
@@ -41,31 +41,31 @@ installed. Cloudflare Universal SSL normally covers `yihua.app` and
 Frontend app:
 
 ```text
-https://taigi.yihua.app/
-https://taigi.yihua.app/index.html
-https://taigi.yihua.app/assets/...
+https://taigi.example.com/
+https://taigi.example.com/index.html
+https://taigi.example.com/assets/...
 ```
 
 Static data and media:
 
 ```text
-https://static-taigi.yihua.app/public/index.json
-https://static-taigi.yihua.app/public/jobs/index.json
-https://static-taigi.yihua.app/public/lexicon/index.json
-https://static-taigi.yihua.app/public/stats.json
-https://static-taigi.yihua.app/public/media/...
+https://static-taigi.example.com/public/index.json
+https://static-taigi.example.com/public/jobs/index.json
+https://static-taigi.example.com/public/lexicon/index.json
+https://static-taigi.example.com/public/stats.json
+https://static-taigi.example.com/public/media/...
 ```
 
 Backend API:
 
 ```text
-https://api-taigi.yihua.app/api/info
-https://api-taigi.yihua.app/auth/status
-https://api-taigi.yihua.app/jobs
-https://api-taigi.yihua.app/admin/static/sync
+https://api-taigi.example.com/api/info
+https://api-taigi.example.com/auth/status
+https://api-taigi.example.com/jobs
+https://api-taigi.example.com/admin/static/sync
 ```
 
-`https://static-taigi.yihua.app/index.html` is not required in the recommended
+`https://static-taigi.example.com/index.html` is not required in the recommended
 layout. The static host is a data/media host, and its public index is
 `/public/index.json`.
 
@@ -75,8 +75,8 @@ For a public frontend deployment:
 
 ```bash
 VITE_PREFER_STATIC_DATA=true
-VITE_STATIC_DATA_BASE_URL=https://static-taigi.yihua.app/public
-VITE_API_BASE_URL=https://api-taigi.yihua.app
+VITE_STATIC_DATA_BASE_URL=https://static-taigi.example.com/public
+VITE_API_BASE_URL=https://api-taigi.example.com
 ```
 
 Behavior:
@@ -96,7 +96,7 @@ Local development for the split mode:
 cd taigi_web/frontend
 
 VITE_PREFER_STATIC_DATA=true \
-VITE_STATIC_DATA_BASE_URL=https://static-taigi.yihua.app/public \
+VITE_STATIC_DATA_BASE_URL=https://static-taigi.example.com/public \
 VITE_API_BASE_URL=http://127.0.0.1:8876 \
 npm run dev
 ```
@@ -108,29 +108,29 @@ Use `http://localhost:5173/` for the frontend during local development.
 On the backend server:
 
 ```bash
-TAIGI_WEB_PUBLIC_URL=https://taigi.yihua.app
-TAIGI_WEB_PUBLIC_STATIC_URL=https://static-taigi.yihua.app
-TAIGI_WEB_CORS_ORIGINS=https://taigi.yihua.app,https://xn--kpr858j.yihua.app,http://localhost:5173,http://127.0.0.1:5174
+TAIGI_WEB_PUBLIC_URL=https://taigi.example.com
+TAIGI_WEB_PUBLIC_STATIC_URL=https://static-taigi.example.com
+TAIGI_WEB_CORS_ORIGINS=https://taigi.example.com,https://taigi-alt.example.com,http://localhost:5173,http://127.0.0.1:5174
 ```
 
 `TAIGI_WEB_PUBLIC_URL` is used for magic login links. It should point users back
 to the frontend, not the API host.
 
 `TAIGI_WEB_CORS_ORIGINS` must list browser origins that are allowed to call
-`api-taigi.yihua.app`.
+`api-taigi.example.com`.
 
 ## Cloudflare DNS
 
 Create records similar to:
 
 ```text
-taigi.yihua.app             -> frontend static hosting target
-xn--kpr858j.yihua.app       -> frontend alias or redirect target
-static-taigi.yihua.app      -> R2 custom domain
-api-taigi.yihua.app         -> HAProxy public endpoint
+taigi.example.com             -> frontend static hosting target
+taigi-alt.example.com       -> frontend alias or redirect target
+static-taigi.example.com      -> R2 custom domain
+api-taigi.example.com         -> HAProxy public endpoint
 ```
 
-If `api-taigi.yihua.app` points to the same HAProxy endpoint as the old backend
+If `api-taigi.example.com` points to the same HAProxy endpoint as the old backend
 host, use either:
 
 ```text
@@ -160,8 +160,8 @@ Set the R2 bucket CORS policy to allow frontend origins:
 [
   {
     "AllowedOrigins": [
-      "https://taigi.yihua.app",
-      "https://xn--kpr858j.yihua.app",
+      "https://taigi.example.com",
+      "https://taigi-alt.example.com",
       "http://localhost:5173"
     ],
     "AllowedMethods": ["GET", "HEAD"],
@@ -177,7 +177,7 @@ expire. A good test is:
 
 ```bash
 curl -sS -H 'Origin: http://localhost:5173' -D - \
-  https://static-taigi.yihua.app/public/jobs/index.json \
+  https://static-taigi.example.com/public/jobs/index.json \
   -o /tmp/taigi-jobs.json
 ```
 
@@ -189,18 +189,18 @@ access-control-allow-origin: http://localhost:5173
 
 ## HAProxy
 
-`api-taigi.yihua.app` should route to the same backend as the existing Taigi
+`api-taigi.example.com` should route to the same backend as the existing Taigi
 backend during migration.
 
 Current pattern:
 
 ```haproxy
-acl is_taigi_voice hdr(host) -i xn--kpr858j.yihua.app
-acl is_taigi_voice hdr(host) -i taigi.yihua.app
-acl is_taigi_voice hdr(host) -i api-taigi.yihua.app
-acl is_taigi_voice ssl_fc_sni xn--kpr858j.yihua.app
-acl is_taigi_voice ssl_fc_sni taigi.yihua.app
-acl is_taigi_voice ssl_fc_sni api-taigi.yihua.app
+acl is_taigi_voice hdr(host) -i taigi-alt.example.com
+acl is_taigi_voice hdr(host) -i taigi.example.com
+acl is_taigi_voice hdr(host) -i api-taigi.example.com
+acl is_taigi_voice ssl_fc_sni taigi-alt.example.com
+acl is_taigi_voice ssl_fc_sni taigi.example.com
+acl is_taigi_voice ssl_fc_sni api-taigi.example.com
 
 use_backend be_taigi_voice if is_taigi_voice
 
@@ -214,7 +214,7 @@ backend be_taigi_voice
 ```
 
 Keep the old host rules during migration. Remove them only after DNS, frontend
-env, and monitoring confirm that `api-taigi.yihua.app` is the active API host.
+env, and monitoring confirm that `api-taigi.example.com` is the active API host.
 
 Validate before reload:
 
@@ -239,7 +239,7 @@ taigi_web_jobs/public_static/public
 The R2 custom domain should expose that as:
 
 ```text
-https://static-taigi.yihua.app/public/...
+https://static-taigi.example.com/public/...
 ```
 
 Recommended sync for public data and media:
@@ -322,19 +322,19 @@ while Cloudflare Pages or GitHub Actions are not ready.
 Worker route:
 
 ```text
-taigi.yihua.app/*
+taigi.example.com/*
 ```
 
 Optional second route if the Taigi punycode domain should serve the same app:
 
 ```text
-xn--kpr858j.yihua.app/*
+taigi-alt.example.com/*
 ```
 
 Worker script:
 
 ```js
-const ASSET_ORIGIN = "https://static-taigi.yihua.app";
+const ASSET_ORIGIN = "https://static-taigi.example.com";
 
 function frontendPath(pathname) {
   if (pathname === "/") return "/index.html";
@@ -372,15 +372,15 @@ taigi_web/docs/cloudflare-worker-r2-frontend.js
 This keeps:
 
 ```text
-https://taigi.yihua.app/         -> R2 /index.html
-https://taigi.yihua.app/assets/  -> R2 /assets/
-https://taigi.yihua.app/anything -> R2 /index.html for SPA fallback
+https://taigi.example.com/         -> R2 /index.html
+https://taigi.example.com/assets/  -> R2 /assets/
+https://taigi.example.com/anything -> R2 /index.html for SPA fallback
 ```
 
 The frontend still reads public snapshots and media from:
 
 ```text
-https://static-taigi.yihua.app/public/...
+https://static-taigi.example.com/public/...
 ```
 
 ## Expected Tests
@@ -388,35 +388,35 @@ https://static-taigi.yihua.app/public/...
 Static snapshot:
 
 ```bash
-curl -I https://static-taigi.yihua.app/public/index.json
-curl https://static-taigi.yihua.app/public/index.json
+curl -I https://static-taigi.example.com/public/index.json
+curl https://static-taigi.example.com/public/index.json
 ```
 
 Static media:
 
 ```bash
-curl -I https://static-taigi.yihua.app/public/media/...
+curl -I https://static-taigi.example.com/public/media/...
 ```
 
 Backend:
 
 ```bash
-curl https://api-taigi.yihua.app/api/info
+curl https://api-taigi.example.com/api/info
 ```
 
 Frontend:
 
 ```bash
-curl -I https://taigi.yihua.app/
+curl -I https://taigi.example.com/
 ```
 
 Browser checks:
 
-- `taigi.yihua.app` loads without a blank screen.
+- `taigi.example.com` loads without a blank screen.
 - Network tab shows anonymous `jobs`, `lexicon`, and `stats` coming from
-  `static-taigi.yihua.app`.
+  `static-taigi.example.com`.
 - Audio and video request URLs return `200` or `206`, not `index.html`.
-- Login and job creation call `api-taigi.yihua.app`.
+- Login and job creation call `api-taigi.example.com`.
 
 ## Troubleshooting
 
@@ -431,7 +431,7 @@ Media controls show but do not play:
 - Check whether the media URL returns `text/html`; if so, the dev proxy or
   static path is wrong.
 - Check `Content-Type`, `Accept-Ranges`, and CORS.
-- Static media should load from `static-taigi.yihua.app/public/media/...`.
+- Static media should load from `static-taigi.example.com/public/media/...`.
 
 R2 CORS still missing:
 
@@ -448,8 +448,8 @@ Slow anonymous page load:
 
 ```bash
 curl -o /dev/null -sS -w 'r2 jobs %{time_total}s %{http_code}\n' \
-  https://static-taigi.yihua.app/public/jobs/index.json
+  https://static-taigi.example.com/public/jobs/index.json
 
 curl -o /dev/null -sS -w 'api jobs %{time_total}s %{http_code}\n' \
-  https://api-taigi.yihua.app/jobs
+  https://api-taigi.example.com/jobs
 ```

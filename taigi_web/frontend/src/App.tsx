@@ -4762,7 +4762,7 @@ function App() {
                                     <Input placeholder="留空使用環境變數或 default profile" />
                                   </Form.Item>
                                   <Form.Item label="Public CDN URL" name="object_storage_public_url">
-                                    <Input placeholder="https://static-taigi.yihua.app" />
+                                    <Input placeholder="https://static-taigi.example.com" />
                                   </Form.Item>
                                   <Flex gap={10} wrap>
                                     <Button onClick={syncStaticStorage} loading={syncingStatic}>
