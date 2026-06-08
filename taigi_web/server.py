@@ -2782,6 +2782,23 @@ def job_sort_score(job: Job) -> tuple:
     return (1 if job.featured_at else 0, job.featured_at or 0, rating, plays, job.updated_at)
 
 
+def job_matches_list_filters(job: Job, kind: str = "", content: str = "", media: str = "") -> bool:
+    if kind and kind != "all" and job.kind != kind:
+        return False
+    if content == "long_article":
+        text_length = len(" ".join((job.chinese_text or job.taigi_text or job.title or "").split()))
+        if not (job.kind == "script" and ((job.segment_count or 0) > 1 or text_length >= 120)):
+            return False
+    elif content == "short_word_audio":
+        if job.kind != "word_asset":
+            return False
+    if media == "video" and not job.video_path:
+        return False
+    if media == "audio" and not job.audio_path:
+        return False
+    return True
+
+
 def present_job(job: Job, admin: bool, user_id: str = ""):
     if admin:
         payload = job.model_dump()
@@ -6070,6 +6087,9 @@ async def create_job(
 async def list_jobs(
     request: Request,
     q: str = "",
+    kind: str = "",
+    content: str = "",
+    media: str = "",
     limit: int = 10,
     offset: int = 0,
     taigi_web_token_cookie: Annotated[Optional[str], Cookie(alias=SESSION_COOKIE)] = None,
@@ -6078,7 +6098,20 @@ async def list_jobs(
     admin_or_token = is_authorized(request, taigi_web_token_cookie, authorization)
     page_limit = max(1, min(limit, 100))
     page_offset = max(0, offset)
-    cache_key = api_cache_key(request, "jobs", q.strip().lower(), page_limit, page_offset, admin_or_token=admin_or_token)
+    clean_kind = kind.strip()
+    clean_content = content.strip()
+    clean_media = media.strip()
+    cache_key = api_cache_key(
+        request,
+        "jobs",
+        q.strip().lower(),
+        clean_kind,
+        clean_content,
+        clean_media,
+        page_limit,
+        page_offset,
+        admin_or_token=admin_or_token,
+    )
     cached = cached_api_response(cache_key)
     if cached is not None:
         return cached
@@ -6105,6 +6138,11 @@ async def list_jobs(
             or query in (job.kind or "").lower()
             or query in (job.problem_reason or "").lower()
             or query in (job.problem_type or "").lower()
+        ]
+    if clean_kind or clean_content or clean_media:
+        jobs = [
+            job for job in jobs
+            if job_matches_list_filters(job, clean_kind, clean_content, clean_media)
         ]
     total = len(jobs)
     page_jobs = jobs[page_offset: page_offset + page_limit]

@@ -2133,6 +2133,13 @@ function App() {
     if (filter === 'short_word_audio') return isShortWordAudioJob(job);
     return true;
   };
+  const jobMatchesServerBackedFilters = (job: Job) => {
+    if (completedJobKindFilter !== 'all' && job.kind !== completedJobKindFilter) return false;
+    if (!jobMatchesContentFilter(job, completedJobContentFilter)) return false;
+    if (completedJobMediaFilter === 'video' && !job.video_path) return false;
+    if (completedJobMediaFilter === 'audio' && !job.audio_path) return false;
+    return true;
+  };
   const jobMarkedOk = (job: Job) => !job.problem && !!job.problem_reported_at;
   const jobMatchesIssueFilter = (job: Job, filter: CompletedJobIssueFilter) => {
     if (filter === 'problem') return !!job.problem;
@@ -2332,7 +2339,10 @@ function App() {
     const snapshot = await loadStaticSnapshot<{ jobs: Job[] }>('jobs/index.json');
     const cleaned = query.trim().toLowerCase();
     const sourceJobs = Array.isArray(snapshot.jobs) ? snapshot.jobs : [];
-    const filtered = cleaned ? sourceJobs.filter((job) => jobMatchesSearch(job, cleaned)) : sourceJobs;
+    const filtered = sourceJobs.filter((job) => (
+      (!cleaned || jobMatchesSearch(job, cleaned))
+      && jobMatchesServerBackedFilters(job)
+    ));
     const offset = append ? jobs.length : 0;
     const nextJobs = filtered.slice(offset, offset + DEFAULT_PAGE_SIZE);
     setReadOnlyMode(true);
@@ -2346,6 +2356,9 @@ function App() {
     const res = await axios.get<PaginatedJobsResponse>('/jobs', {
       params: {
         q: query.trim() || undefined,
+        kind: completedJobKindFilter !== 'all' ? completedJobKindFilter : undefined,
+        content: completedJobContentFilter !== 'all' ? completedJobContentFilter : undefined,
+        media: completedJobMediaFilter !== 'all' ? completedJobMediaFilter : undefined,
         limit: DEFAULT_PAGE_SIZE,
         offset,
       },
