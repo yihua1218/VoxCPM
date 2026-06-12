@@ -5152,7 +5152,7 @@ def rss_feed_xml(request: Request) -> str:
         if job.status != "complete" or job.kind not in {"script", "segment_regeneration"}:
             continue
         title = job.title or title_from_text(job.chinese_text) or "新的台語語音影片"
-        description = first_sentence(job.chinese_text) or "新的台語語音與字幕波形影片已完成。"
+        description = title_from_text(job.chinese_text, limit=160) or "新的台語語音與字幕波形影片已完成。"
         link = f"{base_url}/?tab=jobs"
         updated = job.completed_at or job.updated_at or job.created_at
         items.append((float(updated or 0), feed_item(
